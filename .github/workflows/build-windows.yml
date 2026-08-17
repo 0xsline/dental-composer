@@ -33,11 +33,12 @@ jobs:
         run: windeployqt --release --no-translations build-win/Release/dental-composer.exe
 
       - name: Build NSIS installer
-        run: makensis /DAPP_DIR=build-win\Release scripts\installer.nsi
+        working-directory: scripts
+        run: makensis /DAPP_DIR=..\build-win\Release installer.nsi
 
       - uses: actions/upload-artifact@v4
         with:
           name: dental-composer-win7-x64
           path: |
             build-win/Release/**
-            牙片拼图-0.1.0-Win7-x64-setup.exe
+            scripts/牙片拼图-0.1.0-Win7-x64-setup.exe
