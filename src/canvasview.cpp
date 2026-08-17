@@ -22,6 +22,14 @@
 #include <QTimer>
 #include <QUrl>
 #include <QWheelEvent>
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonValue>
+#include <QPageLayout>
+#include <QPageSize>
+#include <QPrinter>
 
 #include <cmath>
 
@@ -194,7 +202,7 @@ PhotoZone::PhotoZone(const QRectF &rect, const QString &label, QGraphicsItem *pa
     setPen(Qt::NoPen);
 }
 
-void PhotoZone::setImage(const QImage &image)
+void PhotoZone::setImage(const QImage &image, const QString &sourcePath)
 {
     takeImage();
     // 显示副本按分区 3 倍上限降采样（最大缩放下像素级无损），原图保留用于导出
@@ -206,6 +214,7 @@ void PhotoZone::setImage(const QImage &image)
                                Qt::KeepAspectRatio, Qt::SmoothTransformation);
     m_item = new PhotoItem(image, display, this);
     m_item->setZValue(0);
+    m_item->setSourcePath(sourcePath);
     scene()->addItem(m_item);
 }
 
@@ -437,7 +446,7 @@ bool CanvasView::importInto(PhotoZone *zone, const QString &path)
         emit statusMessage(tr("无法读取图片：%1").arg(QFileInfo(path).fileName()));
         return false;
     }
-    zone->setImage(image);
+    zone->setImage(image, path);
     return true;
 }
 
@@ -457,7 +466,7 @@ void CanvasView::importImages(const QStringList &files)
         emit statusMessage(tr("已导入 %1 张图片").arg(count));
 }
 
-void CanvasView::addText(const QString &text)
+TextItem *CanvasView::createTextItem(const QString &text)
 {
     auto *item = new TextItem(text);
     m_scene.addItem(item);
@@ -470,7 +479,12 @@ void CanvasView::addText(const QString &text)
     item->setFlag(QGraphicsItem::ItemIsMovable, true);
     item->setFlag(QGraphicsItem::ItemIsSelectable, true);
     item->setFlag(QGraphicsItem::ItemIsFocusable, true);
+    return item;
+}
 
+void CanvasView::addText(const QString &text)
+{
+    TextItem *item = createTextItem(text);
     int count = 0;
     const QList<QGraphicsItem *> items = m_scene.items();
     for (QGraphicsItem *it : items) {
@@ -486,6 +500,45 @@ void CanvasView::setTextStyle(int pixelSize, const QColor &color)
 {
     m_textPixelSize = pixelSize;
     m_textColor = color;
+}
+
+void CanvasView::applyStyleToSelection(int pixelSize, const QColor &color)
+{
+    bool applied = false;
+    const QList<QGraphicsItem *> selected = m_scene.selectedItems();
+    for (QGraphicsItem *item : selected) {
+        if (auto *text = dynamic_cast<TextItem *>(item)) {
+            QFont f = text->font();
+            f.setPixelSize(pixelSize);
+            text->setFont(f);
+            text->setDefaultTextColor(color);
+            applied = true;
+        }
+    }
+    if (applied)
+        emit statusMessage(tr("已更新选中文字的样式"));
+}
+
+void CanvasView::setTemplateText(const QStringList &lines)
+{
+    for (TextItem *item : m_templateItems) {
+        m_scene.removeItem(item);
+        delete item;
+    }
+    m_templateItems.clear();
+    const QColor clinicalRed(0xc0, 0x39, 0x2b);
+    qreal y = 40.0;
+    for (const QString &line : lines) {
+        TextItem *item = createTextItem(line);
+        QFont f = item->font();
+        f.setPixelSize(28);
+        item->setFont(f);
+        item->setDefaultTextColor(clinicalRed);
+        item->setPos(40.0, y);
+        y += 42.0;
+        m_templateItems.append(item);
+    }
+    emit statusMessage(tr("已生成患者信息文字"));
 }
 
 void CanvasView::removeSelected()
@@ -517,6 +570,7 @@ void CanvasView::clearContent()
             delete text;
         }
     }
+    m_templateItems.clear();
     m_scene.clearSelection();
     emit statusMessage(tr("画布已清空"));
 }
@@ -530,56 +584,175 @@ void CanvasView::requestMoveBetweenZones(PhotoItem *item, const QPointF &scenePo
         PhotoZone *dst = zoneAt(scenePos);
         if (!dst || dst == src)
             return;
+        const QString sourcePath = item->sourcePath();
         const QImage image = item->image();
         src->takeImage();
-        dst->setImage(image);
+        dst->setImage(image, sourcePath);
         emit statusMessage(tr("图片已移动到“%1”").arg(dst->label()));
     });
+}
+void CanvasView::renderContent(QPainter *painter, const QRectF &target)
+{
+    // 导出/打印共用：白底、无分区装饰
+    m_scene.setBackgroundBrush(Qt::white);
+    for (PhotoZone *zone : m_zones) {
+        zone->setVisible(false);
+        if (zone->labelItem())
+            zone->labelItem()->setVisible(false);
+    }
+    painter->setRenderHint(QPainter::Antialiasing, true);
+    painter->setRenderHint(QPainter::TextAntialiasing, true);
+    painter->setRenderHint(QPainter::SmoothPixmapTransform, true);
+    m_scene.render(painter, target, m_scene.sceneRect());
+    m_scene.setBackgroundBrush(kSceneBg);
+    for (PhotoZone *zone : m_zones) {
+        zone->setVisible(true);
+        if (zone->labelItem())
+            zone->labelItem()->setVisible(true);
+    }
 }
 
 bool CanvasView::exportImage(const QString &path, qreal scale)
 {
     if (scale <= 0.0)
         scale = 2.0;
-    // 导出期间切回纯白背景（成品图保持白底），结束后恢复护眼色
-    m_scene.setBackgroundBrush(Qt::white);
     m_scene.clearSelection();
-
-    for (PhotoZone *zone : m_zones) {
-        zone->setVisible(false);
-        if (zone->labelItem())
-            zone->labelItem()->setVisible(false);
-    }
-
     const QRectF src = m_scene.sceneRect();
     const QSize size(int(src.width() * scale + 0.5), int(src.height() * scale + 0.5));
     QImage image(size, QImage::Format_ARGB32_Premultiplied);
     image.fill(Qt::white);
     {
         QPainter painter(&image);
-        painter.setRenderHint(QPainter::Antialiasing, true);
-        painter.setRenderHint(QPainter::TextAntialiasing, true);
-        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-        m_scene.render(&painter, QRectF(0, 0, image.width(), image.height()), src);
+        renderContent(&painter, QRectF(0, 0, image.width(), image.height()));
     }
-    m_scene.setBackgroundBrush(kSceneBg);
-
-    for (PhotoZone *zone : m_zones) {
-        zone->setVisible(true);
-        if (zone->labelItem())
-            zone->labelItem()->setVisible(true);
-    }
-
     const QString suffix = QFileInfo(path).suffix().toLower();
     bool ok = false;
     if (suffix == QStringLiteral("jpg") || suffix == QStringLiteral("jpeg"))
         ok = image.save(path, "JPEG", 92);
     else
         ok = image.save(path, "PNG");
-
     if (!ok)
         emit statusMessage(tr("导出失败：%1").arg(path));
     return ok;
+}
+
+bool CanvasView::exportPdf(const QString &path)
+{
+    QPrinter printer(QPrinter::HighResolution);
+    printer.setOutputFormat(QPrinter::PdfFormat);
+    printer.setOutputFileName(path);
+    printer.setPageSize(QPageSize(QPageSize::A4));
+    printer.setPageOrientation(QPageLayout::Landscape);
+    QPainter painter;
+    if (!painter.begin(&printer))
+        return false;
+    m_scene.clearSelection();
+    const qreal margin = 15.0 / 25.4 * printer.resolution();
+    renderContent(&painter,
+        QRectF(margin, margin, printer.width() - 2 * margin, printer.height() - 2 * margin));
+    painter.end();
+    return true;
+}
+
+bool CanvasView::saveProject(const QString &path)
+{
+    QJsonObject root;
+    root.insert(QStringLiteral("version"), 1);
+    root.insert(QStringLiteral("layout"), m_layoutIndex);
+    root.insert(QStringLiteral("textPixelSize"), m_textPixelSize);
+    root.insert(QStringLiteral("textColor"), m_textColor.name(QColor::HexRgb));
+
+    QJsonArray zoneArray;
+    for (PhotoZone *zone : m_zones) {
+        QJsonObject o;
+        if (PhotoItem *item = zone->item()) {
+            o.insert(QStringLiteral("image"), item->sourcePath());
+            o.insert(QStringLiteral("x"), item->pos().x());
+            o.insert(QStringLiteral("y"), item->pos().y());
+            o.insert(QStringLiteral("scale"), item->scale());
+        }
+        zoneArray.append(o);
+    }
+    root.insert(QStringLiteral("zones"), zoneArray);
+
+    QJsonArray textArray;
+    const QList<QGraphicsItem *> items = m_scene.items();
+    for (QGraphicsItem *item : items) {
+        if (auto *text = dynamic_cast<TextItem *>(item)) {
+            QJsonObject o;
+            o.insert(QStringLiteral("text"), text->toPlainText());
+            o.insert(QStringLiteral("x"), text->pos().x());
+            o.insert(QStringLiteral("y"), text->pos().y());
+            o.insert(QStringLiteral("pixelSize"), text->font().pixelSize());
+            o.insert(QStringLiteral("color"), text->defaultTextColor().name(QColor::HexRgb));
+            textArray.append(o);
+        }
+    }
+    root.insert(QStringLiteral("texts"), textArray);
+
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly))
+        return false;
+    file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    return true;
+}
+
+bool CanvasView::loadProject(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return false;
+    QJsonParseError error;
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &error);
+    if (error.error != QJsonParseError::NoError || !doc.isObject())
+        return false;
+    const QJsonObject root = doc.object();
+
+    applyLayout(root.value(QStringLiteral("layout")).toInt(0));
+    m_textPixelSize = root.value(QStringLiteral("textPixelSize")).toInt(28);
+    m_textColor = QColor(root.value(QStringLiteral("textColor")).toString(QStringLiteral("#1f2937")));
+
+    int missing = 0;
+    const QJsonArray zoneArray = root.value(QStringLiteral("zones")).toArray();
+    for (int i = 0; i < zoneArray.size() && i < m_zones.size(); ++i) {
+        const QJsonObject o = zoneArray.at(i).toObject();
+        const QString imagePath = o.value(QStringLiteral("image")).toString();
+        if (imagePath.isEmpty())
+            continue;
+        if (!QFileInfo::exists(imagePath)) {
+            ++missing;
+            continue;
+        }
+        QImageReader reader(imagePath);
+        reader.setAutoTransform(true);
+        const QImage image = reader.read();
+        if (image.isNull()) {
+            ++missing;
+            continue;
+        }
+        m_zones.at(i)->setImage(image, imagePath);
+        if (PhotoItem *item = m_zones.at(i)->item()) {
+            item->setScale(o.value(QStringLiteral("scale")).toDouble(1.0));
+            item->setPos(o.value(QStringLiteral("x")).toDouble(), o.value(QStringLiteral("y")).toDouble());
+        }
+    }
+
+    const QJsonArray textArray = root.value(QStringLiteral("texts")).toArray();
+    for (const QJsonValue &value : textArray) {
+        const QJsonObject o = value.toObject();
+        TextItem *item = createTextItem(o.value(QStringLiteral("text")).toString());
+        QFont f = item->font();
+        f.setPixelSize(o.value(QStringLiteral("pixelSize")).toInt(m_textPixelSize));
+        item->setFont(f);
+        item->setDefaultTextColor(QColor(o.value(QStringLiteral("color")).toString(QStringLiteral("#1f2937"))));
+        item->setPos(o.value(QStringLiteral("x")).toDouble(), o.value(QStringLiteral("y")).toDouble());
+    }
+
+    if (missing > 0)
+        emit statusMessage(tr("已打开工程，%1 张图片未找到").arg(missing));
+    else
+        emit statusMessage(tr("已打开工程"));
+    return true;
 }
 
 // ---------------------------------------------------------------------------

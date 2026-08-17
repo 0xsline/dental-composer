@@ -4,9 +4,10 @@
 #include <QMainWindow>
 
 class CanvasView;
+class QComboBox;
+class QPrinter;
 class QSpinBox;
 class QToolButton;
-class QComboBox;
 
 class MainWindow : public QMainWindow
 {
@@ -20,12 +21,20 @@ private slots:
     void onImport();
     void onAddText();
     void onExport();
+    void onExportPdf();
+    void onPrint();
+    void onPrintPreview();
+    void onSaveProject();
+    void onOpenProject();
+    void onPatientInfo();
+    void onAbout();
     void onPickColor();
     void onClear();
     void onLayoutChanged(int index);
 
 private:
     void updateColorButton();
+    void printContent(QPrinter *printer);
 
     CanvasView *m_canvas = nullptr;
     QSpinBox *m_fontSize = nullptr;

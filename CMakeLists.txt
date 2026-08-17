@@ -1,13 +1,13 @@
 cmake_minimum_required(VERSION 3.16)
-project(dental-composer VERSION 0.1.0 LANGUAGES CXX)
+project(dental-composer VERSION 0.1.3 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
 # 同一份源码兼容 Qt 5.15（Win7 发布）与 Qt 6（macOS 发布/开发）
-find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets)
+find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets PrintSupport)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets PrintSupport)
 
 add_executable(dental-composer
     src/main.cpp
@@ -17,12 +17,17 @@ add_executable(dental-composer
     src/canvasview.h
     src/exportdialog.cpp
     src/exportdialog.h
+    src/patientinfodialog.cpp
+    src/patientinfodialog.h
     src/selftest.cpp
     src/selftest.h
     src/qtcompat.h
 )
 
-target_link_libraries(dental-composer PRIVATE Qt${QT_VERSION_MAJOR}::Widgets)
+target_link_libraries(dental-composer PRIVATE
+    Qt${QT_VERSION_MAJOR}::Widgets
+    Qt${QT_VERSION_MAJOR}::PrintSupport
+)
 
 # 源码含中文：MSVC 必须按 UTF-8 解析字面量
 if(MSVC)

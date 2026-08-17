@@ -42,6 +42,8 @@ public:
     QPainterPath localClipPath() const;
     PhotoZone *zone() const { return m_zone; }
     QImage image() const { return m_image; }
+    QString sourcePath() const { return m_sourcePath; }
+    void setSourcePath(const QString &path) { m_sourcePath = path; }
     int type() const override { return UserType + 1; }
 
 protected:
@@ -57,7 +59,8 @@ private:
     qreal fitScale() const;
     qreal maxScale() const;
 
-    QImage m_image; // 原图（导出/移动时用）
+    QImage m_image;      // 原图（导出/移动时用）
+    QString m_sourcePath; // 源文件路径（工程保存用）
     PhotoZone *m_zone = nullptr;
     QPointF m_lastScenePos;
     bool m_dragging = false;
@@ -69,7 +72,7 @@ class PhotoZone : public QGraphicsRectItem
 public:
     PhotoZone(const QRectF &rect, const QString &label, QGraphicsItem *parent = nullptr);
 
-    void setImage(const QImage &image); // 装入图片并自动适应（显示副本降采样，原图保留）
+    void setImage(const QImage &image, const QString &sourcePath = QString()); // 装入图片并自动适应（显示副本降采样，原图保留）
     QImage takeImage();                 // 取出并删除内部图片条目
     bool hasImage() const { return m_item != nullptr; }
     PhotoItem *item() const { return m_item; }
@@ -101,7 +104,7 @@ protected:
     void focusOutEvent(QFocusEvent *event) override;
 };
 
-// 主画布视图：多布局分区、拖入图片、文字、导出。
+// 主画布视图：多布局分区、拖入图片、文字、导出、工程文件。
 class CanvasView : public QGraphicsView
 {
     Q_OBJECT
@@ -118,9 +121,15 @@ public:
     void importImages(const QStringList &files);          // 顺序装入空分区
     void addText(const QString &text);
     void setTextStyle(int pixelSize, const QColor &color);
+    void applyStyleToSelection(int pixelSize, const QColor &color); // 字体/颜色作用于选中文字
+    void setTemplateText(const QStringList &lines);       // 患者信息模板文字（替换旧的）
     void removeSelected();
     void clearContent();                                   // 清空图片与文字，保留分区
+    void renderContent(QPainter *painter, const QRectF &target); // 白底、无分区的共用渲染
     bool exportImage(const QString &path, qreal scale);    // 按后缀导出 PNG/JPEG
+    bool exportPdf(const QString &path);
+    bool saveProject(const QString &path);                 // 工程文件
+    bool loadProject(const QString &path);
     PhotoZone *zoneAt(const QPointF &scenePos) const;
     void requestMoveBetweenZones(PhotoItem *item, const QPointF &scenePos);
 
@@ -142,10 +151,12 @@ private:
     PhotoZone *firstEmptyZone() const;
     bool importInto(PhotoZone *zone, const QString &path);
     static bool isImageFile(const QString &path);
+    TextItem *createTextItem(const QString &text);
     void fitScene();
 
     QGraphicsScene m_scene;
     QList<PhotoZone *> m_zones;
+    QList<TextItem *> m_templateItems;
     int m_layoutIndex = 0;
     int m_textPixelSize = 28;
     QColor m_textColor = QColor(0x1f, 0x29, 0x37);

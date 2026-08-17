@@ -121,12 +121,52 @@ int runSelftest(const QString &outPath)
         std::fprintf(stderr, "SELFTEST FAIL: big image zone blank\n");
         return 9;
     }
-    std::printf("BIGIMAGE OK: 6000x4000 import + 3x export in %lld ms\n", (long long)elapsed);
-
-    // 保存单张样图供 GUI 拖入测试
+    // 工程文件往返：先落盘样图（工程保存记录路径），再保存→清空→打开→导出校验
     for (int i = 0; i < 4; ++i)
         source[i].save(dir + QStringLiteral("/") + base + QStringLiteral("_src%1.png").arg(i + 1));
+    canvas->applyLayout(0);
+    for (int i = 0; i < 4; ++i)
+        canvas->zones().at(i)->setImage(source[i],
+            dir + QStringLiteral("/") + base + QStringLiteral("_src%1.png").arg(i + 1));
+    canvas->setTemplateText({ QStringLiteral("8.18号，示例患者，袁萍医生，初诊"),
+                              QStringLiteral("7Y 8M，主诉：窝沟复查") });
+    canvas->addText(QString::fromUtf8("工程往返测试文字"));
+    const QString projPath = dir + QStringLiteral("/") + base + QStringLiteral("_project.dcp");
+    if (!canvas->saveProject(projPath)) {
+        std::fprintf(stderr, "SELFTEST FAIL: save project error\n");
+        return 10;
+    }
+    canvas->clearContent();
+    if (!canvas->loadProject(projPath)) {
+        std::fprintf(stderr, "SELFTEST FAIL: load project error\n");
+        return 11;
+    }
+    const QString projOut = dir + QStringLiteral("/") + base + QStringLiteral("_project.png");
+    if (!canvas->exportImage(projOut, 2.0)) {
+        std::fprintf(stderr, "SELFTEST FAIL: project export error\n");
+        return 12;
+    }
+    const QImage projCheck(projOut);
+    if (projCheck.isNull() || projCheck.width() != 3200 || projCheck.height() != 2200) {
+        std::fprintf(stderr, "SELFTEST FAIL: project export unexpected size\n");
+        return 13;
+    }
+    if (projCheck.pixelColor(818, 1000) == QColor(Qt::white)) {
+        std::fprintf(stderr, "SELFTEST FAIL: project zone blank\n");
+        return 14;
+    }
 
-    std::printf("SELFTEST OK %s (%d layouts)\n", qPrintable(outPath), canvas->layoutCount());
+    // PDF 导出
+    const QString pdfPath = dir + QStringLiteral("/") + base + QStringLiteral("_out.pdf");
+    if (!canvas->exportPdf(pdfPath)) {
+        std::fprintf(stderr, "SELFTEST FAIL: pdf export error\n");
+        return 15;
+    }
+    if (QFileInfo(pdfPath).size() < 1000) {
+        std::fprintf(stderr, "SELFTEST FAIL: pdf too small\n");
+        return 16;
+    }
+
+    std::printf("SELFTEST OK %s (%d layouts, project+pdf)\n", qPrintable(outPath), canvas->layoutCount());
     return 0;
 }
