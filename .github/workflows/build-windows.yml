@@ -37,7 +37,13 @@ jobs:
           # windeployqt 找不到 VCINSTALLDIR 会漏拷运行库，这里显式补上（v142 对应 VC142.CRT）
           $crt = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC" -Recurse -Directory -Filter "Microsoft.VC142.CRT" | Select-Object -First 1
           if ($crt) { Copy-Item -Force "$($crt.FullName)\*.dll" build-win\Release\ }
+          # Win7 默认不带 UCRT（需 KB2999226 补丁），随包分发 ucrtbase.dll 等，保证裸机可跑
+          $ucrt = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\Redist" -Recurse -Directory |
+                  Where-Object { $_.FullName -match 'ucrt\\DLLs\\x64$' } | Select-Object -First 1
+          if ($ucrt) { Copy-Item -Force "$($ucrt.FullName)\*.dll" build-win\Release\ }
+          # 完整性断言
           if (-not (Test-Path build-win\Release\vcruntime140.dll)) { throw "vcruntime140.dll missing" }
+          if (-not (Test-Path build-win\Release\ucrtbase.dll)) { throw "ucrtbase.dll missing" }
 
       - name: Build NSIS installer
         working-directory: scripts
