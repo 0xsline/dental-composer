@@ -1,5 +1,6 @@
-; 牙片拼图 Win7 安装包（NSIS 3.x）
-; 用法：先跑 scripts\build-windows.ps1，再 makensis /DAPP_DIR=..\build-win\Release scripts\installer.nsi
+﻿; 牙片拼图 Win7 安装包（NSIS 3.x，脚本需 UTF-8 BOM 编码）
+; 用法：先跑 scripts\build-windows.ps1，再在 scripts 目录执行
+;   makensis /DAPP_DIR=..\build-win\Release installer.nsi
 
 !ifndef APP_DIR
   !define APP_DIR "..\build-win\Release"
@@ -7,7 +8,7 @@
 
 Name "牙片拼图"
 Caption "牙片拼图 安装"
-OutFile "牙片拼图-0.1.0-Win7-x64-setup.exe"
+OutFile "DentalComposer-0.1.0-Win7-x64-setup.exe"
 InstallDir "$PROGRAMFILES64\DentalComposer"
 RequestExecutionLevel admin
 Unicode true
