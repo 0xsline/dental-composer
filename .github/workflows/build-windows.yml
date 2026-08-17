@@ -4,10 +4,12 @@ on:
   push:
   workflow_dispatch:
 
-      - uses: actions/checkout@v5
+jobs:
   build-win7-x64:
     runs-on: windows-2022
     steps:
+      - uses: actions/checkout@v5
+
       - name: Install MSVC v142 (VS2019) toolset
         shell: pwsh
         run: |
@@ -38,4 +40,4 @@ on:
           name: dental-composer-win7-x64
           path: |
             build-win/Release/**
-            scripts/牙片拼图-0.1.0-Win7-x64-setup.exe
+            牙片拼图-0.1.0-Win7-x64-setup.exe
