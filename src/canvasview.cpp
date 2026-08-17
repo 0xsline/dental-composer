@@ -33,6 +33,14 @@ CanvasView *viewFor(QGraphicsItem *item)
         return nullptr;
     return qobject_cast<CanvasView *>(item->scene()->views().constFirst());
 }
+    // 护眼色系（豆沙绿主题）
+    const QColor kSceneBg(0xc7, 0xed, 0xcc);       // 画布背景
+    const QColor kZoneBg(0xe4, 0xf3, 0xe6);        // 分区底色
+    const QColor kZoneBorder(0x9c, 0xc3, 0xa8);    // 空分区虚线边框
+    const QColor kZoneBorderFull(0xbc, 0xd7, 0xc2); // 有图分区边框
+    const QColor kZoneHint(0x7a, 0x96, 0x81);      // 占位提示文字
+    const QColor kLabelText(0x3e, 0x5b, 0x46);     // 分区角标
+    const QColor kViewBg(0xb3, 0xd8, 0xb8);        // 画布外留白
 
 } // namespace
 
@@ -210,17 +218,17 @@ void PhotoZone::paint(QPainter *painter, const QStyleOptionGraphicsItem *, QWidg
     const QRectF r = rect();
     QPainterPath path;
     path.addRoundedRect(r, 10.0, 10.0);
-    painter->fillPath(path, QColor(0xf7, 0xf8, 0xfa));
+    painter->fillPath(path, kZoneBg);
     if (hasImage()) {
-        painter->setPen(QPen(QColor(0xd7, 0xdc, 0xe3), 1.0));
+        painter->setPen(QPen(kZoneBorderFull, 1.0));
         painter->drawPath(path);
     } else {
-        painter->setPen(QPen(QColor(0xcb, 0xd2, 0xdc), 1.5, Qt::DashLine));
+        painter->setPen(QPen(kZoneBorder, 1.5, Qt::DashLine));
         painter->drawPath(path);
         QFont f = painter->font();
         f.setPixelSize(22);
         painter->setFont(f);
-        painter->setPen(QColor(0x9a, 0xa4, 0xb0));
+        painter->setPen(kZoneHint);
         painter->drawText(r, Qt::AlignCenter, QStringLiteral("拖入图片 或 双击导入"));
     }
 }
@@ -282,8 +290,8 @@ CanvasView::CanvasView(QWidget *parent)
     setAcceptDrops(true);
     viewport()->setAcceptDrops(true);
 
-    setBackgroundBrush(QColor(0xe8, 0xea, 0xee));
-    m_scene.setBackgroundBrush(Qt::white);
+    setBackgroundBrush(kViewBg);
+    m_scene.setBackgroundBrush(kSceneBg);
 }
 
 static const QList<LayoutSpec> &layoutTemplates()
@@ -371,7 +379,7 @@ void CanvasView::applyLayout(int index)
         QFont f = labelItem->font();
         f.setPixelSize(20);
         labelItem->setFont(f);
-        labelItem->setBrush(QColor(0x4b, 0x55, 0x63));
+        labelItem->setBrush(kLabelText);
         labelItem->setPos(zs.rect.topLeft() + QPointF(12.0, 8.0));
         labelItem->setZValue(10);
         zone->setLabelItem(labelItem);
@@ -522,6 +530,8 @@ bool CanvasView::exportImage(const QString &path, qreal scale)
 {
     if (scale <= 0.0)
         scale = 2.0;
+    // 导出期间切回纯白背景（成品图保持白底），结束后恢复护眼色
+    m_scene.setBackgroundBrush(Qt::white);
     m_scene.clearSelection();
 
     for (PhotoZone *zone : m_zones) {
@@ -541,6 +551,7 @@ bool CanvasView::exportImage(const QString &path, qreal scale)
         painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
         m_scene.render(&painter, QRectF(0, 0, image.width(), image.height()), src);
     }
+    m_scene.setBackgroundBrush(kSceneBg);
 
     for (PhotoZone *zone : m_zones) {
         zone->setVisible(true);

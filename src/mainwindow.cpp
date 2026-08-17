@@ -8,6 +8,7 @@
 #include <QComboBox>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QStandardPaths>
 #include <QLabel>
 #include <QMessageBox>
 #include <QSpinBox>
@@ -144,13 +145,22 @@ void MainWindow::onPickColor()
 void MainWindow::onExport()
 {
     QString selectedFilter;
+    // 默认存到用户"图片"目录：Win7 安装版运行时 cwd 是 Program Files（无写权限），
+    // 相对默认名会导致"导出失败"
+    const QString defaultDir = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
     const QString path = QFileDialog::getSaveFileName(this, tr("导出图片"),
-        tr("拼图结果.png"), tr("PNG 图片 (*.png);;JPEG 图片 (*.jpg)"), &selectedFilter);
+        defaultDir + QStringLiteral("/") + tr("拼图结果.png"),
+        tr("PNG 图片 (*.png);;JPEG 图片 (*.jpg)"), &selectedFilter);
     if (path.isEmpty())
         return;
     ExportDialog dialog(this);
     if (dialog.exec() != QDialog::Accepted)
         return;
-    if (m_canvas->exportImage(path, dialog.scale()))
+    if (m_canvas->exportImage(path, dialog.scale())) {
         statusBar()->showMessage(tr("已导出：%1").arg(QFileInfo(path).fileName()), 8000);
+    } else {
+        QMessageBox::warning(this, tr("导出失败"),
+            tr("无法写入文件：\n%1\n\n请换一个有写入权限的位置（如桌面、图片文件夹）后重试。")
+                .arg(path));
+    }
 }
