@@ -9,6 +9,7 @@
 #include <QFileInfo>
 #include <QFont>
 #include <QImage>
+#include <QElapsedTimer>
 #include <QPainter>
 #include <QPoint>
 #include <QString>
@@ -96,6 +97,31 @@ int runSelftest(const QString &outPath)
             return 4;
         }
     }
+
+    // 大图降采样路径：6000x4000 超出分区显示上限，导入后导出应正常且像素完整
+    canvas->applyLayout(0);
+    QImage big(6000, 4000, QImage::Format_RGB32);
+    big.fill(QColor(0x7d, 0x5a, 0x9e));
+    QElapsedTimer timer;
+    timer.start();
+    canvas->zones().at(0)->setImage(big);
+    const QString bigOut = dir + QStringLiteral("/") + base + QStringLiteral("_big.png");
+    if (!canvas->exportImage(bigOut, 3.0)) {
+        std::fprintf(stderr, "SELFTEST FAIL: big image export error\n");
+        return 7;
+    }
+    const qint64 elapsed = timer.elapsed();
+    const QImage bigCheck(bigOut);
+    if (bigCheck.isNull() || bigCheck.width() != 4800 || bigCheck.height() != 3300) {
+        std::fprintf(stderr, "SELFTEST FAIL: big export unexpected size %dx%d\n",
+                     bigCheck.width(), bigCheck.height());
+        return 8;
+    }
+    if (bigCheck.pixelColor(1227, 1389) == QColor(Qt::white)) {
+        std::fprintf(stderr, "SELFTEST FAIL: big image zone blank\n");
+        return 9;
+    }
+    std::printf("BIGIMAGE OK: 6000x4000 import + 3x export in %lld ms\n", (long long)elapsed);
 
     // 保存单张样图供 GUI 拖入测试
     for (int i = 0; i < 4; ++i)

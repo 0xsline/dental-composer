@@ -4,6 +4,7 @@
 
 #include <QApplication>
 #include <QByteArray>
+#include <QFontDatabase>
 #include <QString>
 #include <QStringList>
 
@@ -33,6 +34,8 @@ int main(int argc, char *argv[])
     QApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
 #endif
     QApplication app(argc, argv);
+    // 显式设置默认字体，避免缺失字体别名回退的初始化开销
+    QApplication::setFont(QFontDatabase::systemFont(QFontDatabase::GeneralFont));
     QApplication::setApplicationName(QStringLiteral("dental-composer"));
     QApplication::setOrganizationName(QStringLiteral("dental"));
 

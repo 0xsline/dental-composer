@@ -48,24 +48,27 @@ CanvasView *viewFor(QGraphicsItem *item)
 // PhotoItem
 // ---------------------------------------------------------------------------
 
-PhotoItem::PhotoItem(const QImage &image, PhotoZone *zone)
-    : QGraphicsPixmapItem(QPixmap::fromImage(image))
-    , m_image(image)
+PhotoItem::PhotoItem(const QImage &original, const QImage &display, PhotoZone *zone)
+    : QGraphicsPixmapItem(QPixmap::fromImage(display))
+    , m_image(original)
     , m_zone(zone)
 {
     setFlag(QGraphicsItem::ItemIsSelectable, true);
     setCursor(Qt::OpenHandCursor);
     setTransformationMode(Qt::SmoothTransformation);
+    // 矩形图片用包围盒命中检测（免逐像素 mask）；拖动平移时用设备缓存，缩放时才重建
+    setShapeMode(QGraphicsPixmapItem::BoundingRectShape);
+    setCacheMode(QGraphicsItem::DeviceCoordinateCache);
     fitToZone();
 }
 
 qreal PhotoItem::fitScale() const
 {
-    if (!m_zone || m_image.isNull())
+    if (!m_zone || pixmap().isNull())
         return 1.0;
     const QRectF zr = m_zone->rect();
     // 覆盖模式：取较大比例，图片始终铺满分区（无留白），可平移/缩放查看细节
-    return qMax(zr.width() / m_image.width(), zr.height() / m_image.height());
+    return qMax(zr.width() / pixmap().width(), zr.height() / pixmap().height());
 }
 
 qreal PhotoItem::maxScale() const
@@ -80,7 +83,7 @@ void PhotoItem::fitToZone()
     const qreal s = fitScale();
     setScale(s);
     const QRectF zr = m_zone->rect();
-    const QSizeF sz = QSizeF(m_image.size()) * s;
+    const QSizeF sz = QSizeF(pixmap().size()) * s;
     // PhotoItem 是顶层条目，坐标为场景坐标，须加上分区原点
     setPos(zr.topLeft() + QPointF((zr.width() - sz.width()) / 2.0, (zr.height() - sz.height()) / 2.0));
     clampToZone();
@@ -91,7 +94,7 @@ void PhotoItem::clampToZone()
     if (!m_zone)
         return;
     const QRectF zr = m_zone->rect();
-    const QSizeF sz = QSizeF(m_image.size()) * scale();
+    const QSizeF sz = QSizeF(pixmap().size()) * scale();
     const qreal minX = zr.right() - sz.width();
     const qreal minY = zr.bottom() - sz.height();
     QPointF p = pos();
@@ -194,7 +197,14 @@ PhotoZone::PhotoZone(const QRectF &rect, const QString &label, QGraphicsItem *pa
 void PhotoZone::setImage(const QImage &image)
 {
     takeImage();
-    m_item = new PhotoItem(image, this);
+    // 显示副本按分区 3 倍上限降采样（最大缩放下像素级无损），原图保留用于导出
+    QImage display = image;
+    const QRectF zr = rect();
+    const qreal ratio = qMin(zr.width() * 3.0 / image.width(), zr.height() * 3.0 / image.height());
+    if (ratio < 1.0)
+        display = image.scaled(QSize(int(image.width() * ratio), int(image.height() * ratio)),
+                               Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    m_item = new PhotoItem(image, display, this);
     m_item->setZValue(0);
     scene()->addItem(m_item);
 }
@@ -277,6 +287,7 @@ CanvasView::CanvasView(QWidget *parent)
 {
     setScene(&m_scene);
     buildScene();
+    m_scene.setItemIndexMethod(QGraphicsScene::NoIndex);
 
     setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing | QPainter::SmoothPixmapTransform);
     setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);

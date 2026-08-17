@@ -36,7 +36,7 @@ struct LayoutSpec
 class PhotoItem : public QGraphicsPixmapItem
 {
 public:
-    PhotoItem(const QImage &image, PhotoZone *zone);
+    PhotoItem(const QImage &original, const QImage &display, PhotoZone *zone);
 
     void fitToZone();
     QPainterPath localClipPath() const;
@@ -57,7 +57,7 @@ private:
     qreal fitScale() const;
     qreal maxScale() const;
 
-    QImage m_image;
+    QImage m_image; // 原图（导出/移动时用）
     PhotoZone *m_zone = nullptr;
     QPointF m_lastScenePos;
     bool m_dragging = false;
@@ -69,7 +69,7 @@ class PhotoZone : public QGraphicsRectItem
 public:
     PhotoZone(const QRectF &rect, const QString &label, QGraphicsItem *parent = nullptr);
 
-    void setImage(const QImage &image); // 装入图片并自动适应
+    void setImage(const QImage &image); // 装入图片并自动适应（显示副本降采样，原图保留）
     QImage takeImage();                 // 取出并删除内部图片条目
     bool hasImage() const { return m_item != nullptr; }
     PhotoItem *item() const { return m_item; }
