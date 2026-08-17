@@ -33,13 +33,10 @@ jobs:
         shell: pwsh
         run: |
           windeployqt --release --no-translations build-win/Release/dental-composer.exe
-          # 补全图片格式插件（确保 qpng 等齐全）
-          Copy-Item -Force -Recurse "$env:QT_PLUGIN_PATH\imageformats\*" build-win\Release\imageformats\
+          # Qt 5.15 的 PNG 支持内置于 Qt5Gui（无 qpng 插件）；JPEG/GIF 等插件已由 windeployqt 拷贝
           # windeployqt 找不到 VCINSTALLDIR 会漏拷运行库，这里显式补上（v142 对应 VC142.CRT）
           $crt = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC" -Recurse -Directory -Filter "Microsoft.VC142.CRT" | Select-Object -First 1
           if ($crt) { Copy-Item -Force "$($crt.FullName)\*.dll" build-win\Release\ }
-          # 核心能力断言：PNG 插件与 VC 运行库必须在
-          if (-not (Test-Path build-win\Release\imageformats\qpng.dll)) { throw "qpng.dll missing" }
           if (-not (Test-Path build-win\Release\vcruntime140.dll)) { throw "vcruntime140.dll missing" }
 
       - name: Build NSIS installer
