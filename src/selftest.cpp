@@ -64,7 +64,7 @@ int runSelftest(const QString &outPath)
             zone->setImage(source[best]);
         }
 
-        canvas->addText(QString::fromUtf8("陶言溪  18663779732  7Y 8M"));
+        canvas->addText(QString::fromUtf8("示例患者  13800000000  7Y 8M"));
         canvas->addText(QString::fromUtf8("主诉：窝沟复查"));
 
         const QString out = dir + QStringLiteral("/") + base
