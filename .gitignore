@@ -3,3 +3,4 @@ build-*/
 *.user
 .DS_Store
 dist/
+拼图结果.png

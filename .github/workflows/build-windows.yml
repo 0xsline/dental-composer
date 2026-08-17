@@ -4,7 +4,7 @@ on:
   push:
   workflow_dispatch:
 
-jobs:
+      - uses: actions/checkout@v5
   build-win7-x64:
     runs-on: windows-2022
     steps:
@@ -13,7 +13,7 @@ jobs:
         run: |
           $vsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           $installPath = & $vsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe" modify --installPath $installPath --add Microsoft.VisualStudio.Component.VC.v142.x86.x64 --quiet --norestart --wait
+          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe" modify --installPath $installPath --add Microsoft.VisualStudio.Component.VC.v142.x86.x64 --quiet --norestart
 
       - name: Install Qt 5.15.2 (MSVC2019 x64)
         uses: jurplel/install-qt-action@v4
