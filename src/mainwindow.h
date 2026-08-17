@@ -6,6 +6,7 @@
 class CanvasView;
 class QSpinBox;
 class QToolButton;
+class QComboBox;
 
 class MainWindow : public QMainWindow
 {
@@ -21,6 +22,7 @@ private slots:
     void onExport();
     void onPickColor();
     void onClear();
+    void onLayoutChanged(int index);
 
 private:
     void updateColorButton();
@@ -28,5 +30,6 @@ private:
     CanvasView *m_canvas = nullptr;
     QSpinBox *m_fontSize = nullptr;
     QToolButton *m_colorButton = nullptr;
+    QComboBox *m_layoutBox = nullptr;
     QColor m_textColor;
 };

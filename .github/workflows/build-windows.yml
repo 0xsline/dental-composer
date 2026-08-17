@@ -1,0 +1,31 @@
+name: build-windows
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build-win7-x64:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt 5.15.2 (MSVC2019 x64)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '5.15.2'
+          arch: 'win64_msvc2019_64'
+
+      - name: Configure (VS2022 + v142 toolset, Win7-compatible ABI)
+        run: cmake -S . -B build-win -G "Visual Studio 17 2022" -A x64 -DCMAKE_GENERATOR_TOOLSET=v142
+
+      - name: Build Release
+        run: cmake --build build-win --config Release
+
+      - name: Deploy Qt runtime
+        run: windeployqt --release --no-translations build-win/Release/dental-composer.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dental-composer-win7-x64
+          path: build-win/Release/**

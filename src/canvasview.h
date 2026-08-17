@@ -18,6 +18,20 @@ class PhotoZone;
 class QGraphicsSimpleTextItem;
 class QPainterPath;
 
+// 分区定义：位置 + 名称
+struct ZoneSpec
+{
+    QRectF rect;
+    QString label;
+};
+
+// 布局模板：名称 + 一组分区
+struct LayoutSpec
+{
+    QString name;
+    QList<ZoneSpec> zones;
+};
+
 // 分区内的一张图片：平移、滚轮缩放、双击适应、可拖到其他分区。
 class PhotoItem : public QGraphicsPixmapItem
 {
@@ -87,7 +101,7 @@ protected:
     void focusOutEvent(QFocusEvent *event) override;
 };
 
-// 主画布视图：四分区、拖入图片、文字、导出。
+// 主画布视图：多布局分区、拖入图片、文字、导出。
 class CanvasView : public QGraphicsView
 {
     Q_OBJECT
@@ -95,6 +109,11 @@ public:
     explicit CanvasView(QWidget *parent = nullptr);
 
     const QList<PhotoZone *> &zones() const { return m_zones; }
+
+    int layoutCount() const;
+    QString layoutName(int index) const;
+    int currentLayout() const { return m_layoutIndex; }
+    void applyLayout(int index); // 切换布局模板（清空现有内容）
 
     void importImages(const QStringList &files);          // 顺序装入空分区
     void addText(const QString &text);
@@ -127,6 +146,7 @@ private:
 
     QGraphicsScene m_scene;
     QList<PhotoZone *> m_zones;
+    int m_layoutIndex = 0;
     int m_textPixelSize = 28;
     QColor m_textColor = QColor(0x1f, 0x29, 0x37);
 };

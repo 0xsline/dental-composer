@@ -56,7 +56,8 @@ qreal PhotoItem::fitScale() const
     if (!m_zone || m_image.isNull())
         return 1.0;
     const QRectF zr = m_zone->rect();
-    return qMin(zr.width() / m_image.width(), zr.height() / m_image.height());
+    // 覆盖模式：取较大比例，图片始终铺满分区（无留白），可平移/缩放查看细节
+    return qMax(zr.width() / m_image.width(), zr.height() / m_image.height());
 }
 
 qreal PhotoItem::maxScale() const
@@ -285,39 +286,101 @@ CanvasView::CanvasView(QWidget *parent)
     m_scene.setBackgroundBrush(Qt::white);
 }
 
+static const QList<LayoutSpec> &layoutTemplates()
+{
+    static const QList<LayoutSpec> templates = [] {
+        QList<LayoutSpec> list;
+        const qreal W = 1600.0;
+        const qreal H = 1100.0;
+        const qreal margin = 28.0;
+        const qreal gap = 20.0;
+        const qreal zw = (W - 2 * margin - gap) / 2.0;
+        const qreal zh = (H - 2 * margin - gap) / 2.0;
+        const qreal ww = W - 2 * margin;
+
+        LayoutSpec s1;
+        s1.name = QStringLiteral("四格");
+        s1.zones << ZoneSpec{ QRectF(margin, margin, zw, zh), QStringLiteral("全景片") }
+                 << ZoneSpec{ QRectF(margin + zw + gap, margin, zw, zh), QStringLiteral("正面照") }
+                 << ZoneSpec{ QRectF(margin, margin + zh + gap, zw, zh), QStringLiteral("上颌") }
+                 << ZoneSpec{ QRectF(margin + zw + gap, margin + zh + gap, zw, zh), QStringLiteral("下颌") };
+        list << s1;
+
+        LayoutSpec s2;
+        s2.name = QStringLiteral("三格·上下颌分开");
+        s2.zones << ZoneSpec{ QRectF(margin, margin, ww, zh), QStringLiteral("正面照") }
+                 << ZoneSpec{ QRectF(margin, margin + zh + gap, zw, zh), QStringLiteral("上颌") }
+                 << ZoneSpec{ QRectF(margin + zw + gap, margin + zh + gap, zw, zh), QStringLiteral("下颌") };
+        list << s2;
+
+        LayoutSpec s3;
+        s3.name = QStringLiteral("三格·上下颌合体");
+        s3.zones << ZoneSpec{ QRectF(margin, margin, zw, zh), QStringLiteral("全景片") }
+                 << ZoneSpec{ QRectF(margin + zw + gap, margin, zw, zh), QStringLiteral("正面照") }
+                 << ZoneSpec{ QRectF(margin, margin + zh + gap, ww, zh), QStringLiteral("上下颌") };
+        list << s3;
+
+        return list;
+    }();
+    return templates;
+}
+
 void CanvasView::buildScene()
 {
-    const qreal W = 1600.0;
-    const qreal H = 1100.0;
-    const qreal margin = 28.0;
-    const qreal gap = 20.0;
-    const qreal zw = (W - 2 * margin - gap) / 2.0;
-    const qreal zh = (H - 2 * margin - gap) / 2.0;
+    m_scene.setSceneRect(0, 0, 1600.0, 1100.0);
+    applyLayout(0);
+}
 
-    QStringList labels;
-    labels << QStringLiteral("全景片") << QStringLiteral("正面照")
-           << QStringLiteral("上颌") << QStringLiteral("下颌");
+int CanvasView::layoutCount() const
+{
+    return layoutTemplates().size();
+}
 
-    m_scene.setSceneRect(0, 0, W, H);
-    for (int i = 0; i < 4; ++i) {
-        const int row = i / 2;
-        const int col = i % 2;
-        const QRectF rect(margin + col * (zw + gap), margin + row * (zh + gap), zw, zh);
+QString CanvasView::layoutName(int index) const
+{
+    const QList<LayoutSpec> &templates = layoutTemplates();
+    if (index >= 0 && index < templates.size())
+        return templates.at(index).name;
+    return QString();
+}
 
-        auto *zone = new PhotoZone(rect, labels.value(i), nullptr);
+void CanvasView::applyLayout(int index)
+{
+    const QList<LayoutSpec> &templates = layoutTemplates();
+    if (index < 0 || index >= templates.size())
+        return;
+
+    clearContent(); // 移除已有图片与文字
+
+    for (PhotoZone *zone : m_zones) {
+        if (zone->labelItem()) {
+            m_scene.removeItem(zone->labelItem());
+            delete zone->labelItem();
+        }
+        m_scene.removeItem(zone);
+        delete zone;
+    }
+    m_zones.clear();
+
+    const LayoutSpec &spec = templates.at(index);
+    for (const ZoneSpec &zs : spec.zones) {
+        auto *zone = new PhotoZone(zs.rect, zs.label, nullptr);
         m_scene.addItem(zone);
 
-        auto *labelItem = m_scene.addSimpleText(labels.value(i));
+        auto *labelItem = m_scene.addSimpleText(zs.label);
         QFont f = labelItem->font();
         f.setPixelSize(20);
         labelItem->setFont(f);
         labelItem->setBrush(QColor(0x4b, 0x55, 0x63));
-        labelItem->setPos(rect.topLeft() + QPointF(12.0, 8.0));
+        labelItem->setPos(zs.rect.topLeft() + QPointF(12.0, 8.0));
         labelItem->setZValue(10);
         zone->setLabelItem(labelItem);
 
         m_zones.append(zone);
     }
+
+    m_layoutIndex = index;
+    fitScene();
 }
 
 bool CanvasView::isImageFile(const QString &path)

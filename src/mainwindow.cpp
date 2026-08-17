@@ -5,6 +5,7 @@
 #include <QAction>
 #include <QTimer>
 #include <QColorDialog>
+#include <QComboBox>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QLabel>
@@ -51,6 +52,17 @@ MainWindow::MainWindow(QWidget *parent)
     m_colorButton = new QToolButton(toolBar);
     m_colorButton->setToolTip(tr("新文字的颜色"));
     toolBar->addWidget(m_colorButton);
+
+    toolBar->addSeparator();
+    toolBar->addWidget(new QLabel(tr(" 布局 "), toolBar));
+    m_layoutBox = new QComboBox(toolBar);
+    for (int i = 0; i < m_canvas->layoutCount(); ++i)
+        m_layoutBox->addItem(m_canvas->layoutName(i));
+    m_layoutBox->setCurrentIndex(m_canvas->currentLayout());
+    m_layoutBox->setToolTip(tr("画布布局模板（切换会清空画布）"));
+    toolBar->addWidget(m_layoutBox);
+    connect(m_layoutBox, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MainWindow::onLayoutChanged);
 
     connect(actImport, &QAction::triggered, this, &MainWindow::onImport);
     connect(actText, &QAction::triggered, this, &MainWindow::onAddText);
@@ -101,6 +113,22 @@ void MainWindow::onClear()
         tr("确定清空画布上的全部图片与文字？"));
     if (answer == QMessageBox::Yes)
         m_canvas->clearContent();
+}
+
+void MainWindow::onLayoutChanged(int index)
+{
+    if (m_canvas->currentLayout() == index)
+        return;
+    const auto answer = QMessageBox::question(this, tr("切换布局"),
+        tr("切换布局会清空画布上的图片与文字，确定切换？"));
+    if (answer != QMessageBox::Yes) {
+        m_layoutBox->blockSignals(true);
+        m_layoutBox->setCurrentIndex(m_canvas->currentLayout());
+        m_layoutBox->blockSignals(false);
+        return;
+    }
+    m_canvas->applyLayout(index);
+    statusBar()->showMessage(tr("已切换到“%1”布局").arg(m_canvas->layoutName(index)), 5000);
 }
 
 void MainWindow::onPickColor()
