@@ -6,7 +6,7 @@ on:
 
 jobs:
   build-macos:
-    runs-on: macos-13
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v5
 
@@ -14,9 +14,6 @@ jobs:
         uses: jurplel/install-qt-action@v4
         with:
           version: '6.7.3'
-          host: mac
-          target: desktop
-          arch: clang_64
           cache: true
 
       - name: Configure and build
