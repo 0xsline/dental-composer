@@ -234,18 +234,44 @@ qreal PhotoItem::resizeFactor(ResizeHandle handle, const QPointF &mouseScene) co
     }
 }
 
+void PhotoItem::applyAnchoredZoom(qreal factor, const QPointF &anchorScene)
+{
+    if (!m_zone)
+        return;
+    const qreal s0 = scale();
+    const QPointF P0 = pos();
+    const QSizeF S0 = QSizeF(pixmap().size()) * s0;
+    const QRectF Z = m_zone->rect();
+    // 锚点相对图像左上的偏移（场景单位 @s0）
+    const qreal ax = anchorScene.x() - P0.x();
+    const qreal ay = anchorScene.y() - P0.y();
+    // 满足"图片仍覆盖分区"的最小缩放因子：图像四边不得越过分区四边
+    qreal fmin = 0.0;
+    if (ax > 0.0)
+        fmin = qMax(fmin, (anchorScene.x() - Z.left()) / ax);
+    if (ay > 0.0)
+        fmin = qMax(fmin, (anchorScene.y() - Z.top()) / ay);
+    const qreal rx = S0.width() - ax;
+    const qreal ry = S0.height() - ay;
+    if (rx > 0.0)
+        fmin = qMax(fmin, (Z.right() - anchorScene.x()) / rx);
+    if (ry > 0.0)
+        fmin = qMax(fmin, (Z.bottom() - anchorScene.y()) / ry);
+    fmin = qBound(0.0, fmin, 1.0);
+    // 实际因子：不小于覆盖下限、不超过最大缩放
+    const qreal s = qBound(s0 * qMax(factor, fmin), fitScale(), maxScale());
+    const qreal f = s / s0;
+    setScale(s);
+    // 锚点绝对不动，覆盖约束已由 fmin 保证；clamp 仅作浮点误差兜底
+    setPos(anchorScene - (anchorScene - P0) * f);
+    clampToZone();
+}
+
 void PhotoItem::applyResize(ResizeHandle handle, const QPointF &mouseScene)
 {
     if (handle == ResizeHandle::None)
         return;
-    const qreal f = resizeFactor(handle, mouseScene);
-    const qreal s = qBound(fitScale(), scale() * f, maxScale());
-    const qreal actual = s / scale();
-    const QPointF anchor = resizeAnchor(handle);
-    setScale(s);
-    // 保持锚点（对边/对角）不动
-    setPos(anchor - (anchor - pos()) * actual);
-    clampToZone();
+    applyAnchoredZoom(resizeFactor(handle, mouseScene), resizeAnchor(handle));
 }
 
 void PhotoItem::hoverEnterEvent(QGraphicsSceneHoverEvent *event)
@@ -355,10 +381,7 @@ void PhotoItem::mouseReleaseEvent(QGraphicsSceneMouseEvent *event)
 
 void PhotoItem::zoomBy(qreal factor, const QPointF &scenePos)
 {
-    const qreal s = qBound(fitScale(), scale() * factor, maxScale());
-    setTransformOriginPoint(mapFromScene(scenePos));
-    setScale(s);
-    clampToZone();
+    applyAnchoredZoom(factor, scenePos);
 }
 
 void PhotoItem::wheelEvent(QGraphicsSceneWheelEvent *event)
@@ -377,7 +400,8 @@ void PhotoItem::wheelEvent(QGraphicsSceneWheelEvent *event)
             view->pushUndoSnapshot();
         m_lastWheelUndo.restart();
     }
-    zoomBy(std::pow(1.15, dy / 120.0), event->scenePos());
+    // 以分区中心为固定中心点缩放（体验更稳，不随光标漂移）
+    zoomBy(std::pow(1.15, dy / 120.0), m_zone ? m_zone->rect().center() : event->scenePos());
     event->accept();
 }
 

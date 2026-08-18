@@ -70,6 +70,7 @@ protected:
 private:
     void clampToZone();
     qreal fitScale() const;
+    void applyAnchoredZoom(qreal factor, const QPointF &anchorScene);
     qreal maxScale() const;
     ResizeHandle handleAt(const QPointF &scenePos) const;
     QPointF resizeAnchor(ResizeHandle handle) const;
