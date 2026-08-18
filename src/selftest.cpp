@@ -6,13 +6,18 @@
 #include "mainwindow.h"
 
 #include <QColor>
+#include <QCoreApplication>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QElapsedTimer>
 #include <QFileInfo>
 #include <QFont>
 #include <QImage>
-#include <QElapsedTimer>
+#include <QMimeData>
 #include <QPainter>
 #include <QPoint>
 #include <QString>
+#include <QUrl>
 
 #include <cstdio>
 
@@ -166,23 +171,26 @@ int runSelftest(const QString &outPath)
         std::fprintf(stderr, "SELFTEST FAIL: pdf too small\n");
         return 16;
     }
-    // 拖边缩放：右下角句柄外拖 → 放大；内拖回 → 缩小；且始终覆盖分区
+    // 拖边缩放：句柄在图片上，等比例自由缩放，可小于分区
     canvas->applyLayout(0);
     PhotoZone *rz = canvas->zones().at(0);
     rz->setImage(source[0]);
     PhotoItem *ritem = rz->item();
     ritem->setSelected(true);
-    const QRectF zr = rz->rect();
     const qreal scaleFit = ritem->scale();
+    const QRectF img0 = ritem->imageSceneRect();
     ritem->applyResize(PhotoItem::ResizeHandle::CornerBottomRight,
-                       zr.bottomRight() + QPointF(400.0, 400.0));
-    const QPointF anchor = zr.topLeft(); // CornerBottomRight 的锚点
-    ritem->applyResize(PhotoItem::ResizeHandle::CornerBottomRight,
-                       anchor + (zr.bottomRight() - anchor) * 0.25);
-    if (qAbs(ritem->scale() - scaleFit) > 0.001) {
-        std::fprintf(stderr, "SELFTEST FAIL: resize did not zoom back to fit (%.3f vs %.3f)\n",
+                       img0.bottomRight() + QPointF(200.0, 200.0));
+    if (ritem->scale() <= scaleFit + 0.001) {
+        std::fprintf(stderr, "SELFTEST FAIL: resize did not enlarge (%.3f vs %.3f)\n",
                      ritem->scale(), scaleFit);
         return 18;
+    }
+    ritem->applyResize(PhotoItem::ResizeHandle::CornerBottomRight, img0.center());
+    if (ritem->scale() >= scaleFit) {
+        std::fprintf(stderr, "SELFTEST FAIL: resize could not shrink below fit (%.3f vs %.3f)\n",
+                     ritem->scale(), scaleFit);
+        return 23;
     }
     ritem->setSelected(false);
 
@@ -217,6 +225,58 @@ int runSelftest(const QString &outPath)
         return 22;
     }
 
-    std::printf("SELFTEST OK %s (%d layouts, project+pdf+resize+undo)\n", qPrintable(outPath), canvas->layoutCount());
+    // 等比例缩小：必须能小于初始 contain
+    canvas->applyLayout(0);
+    canvas->zones().at(0)->setImage(source[0], src1);
+    PhotoItem *shrinkItem = canvas->zones().at(0)->item();
+    const qreal shrinkBefore = shrinkItem->scale();
+    shrinkItem->zoomBy(0.5, shrinkItem->imageSceneRect().center());
+    if (shrinkItem->scale() >= shrinkBefore - 0.001) {
+        std::fprintf(stderr, "SELFTEST FAIL: zoomBy could not shrink below contain (%.3f vs %.3f)\n",
+                     shrinkItem->scale(), shrinkBefore);
+        return 24;
+    }
+    if (qAbs(shrinkItem->scale() / shrinkBefore - 0.5) > 0.05) {
+        std::fprintf(stderr, "SELFTEST FAIL: zoomBy not proportional (%.3f -> %.3f)\n",
+                     shrinkBefore, shrinkItem->scale());
+        return 25;
+    }
+
+    // 拖入：MIME 解析 + 发送 Drop 事件
+    canvas->applyLayout(0);
+    QMimeData mime;
+    mime.setUrls({ QUrl::fromLocalFile(src1) });
+    if (!CanvasView::canAcceptImageDrop(&mime)) {
+        std::fprintf(stderr, "SELFTEST FAIL: canAcceptImageDrop rejected local file\n");
+        return 26;
+    }
+    const QStringList parsed = CanvasView::imagePathsFromMime(&mime);
+    if (parsed.size() != 1 || parsed.at(0) != src1) {
+        std::fprintf(stderr, "SELFTEST FAIL: imagePathsFromMime missed local file\n");
+        return 27;
+    }
+    QMimeData fileIdMime;
+    fileIdMime.setUrls({ QUrl(QStringLiteral("file:///.file/id=6571367.1")) });
+    if (!CanvasView::canAcceptImageDrop(&fileIdMime)) {
+        std::fprintf(stderr, "SELFTEST FAIL: canAcceptImageDrop rejected file-id URL (Finder drag)\n");
+        return 28;
+    }
+    PhotoZone *dropZone = canvas->zones().at(0);
+    const QPoint dropPt = canvas->mapFromScene(dropZone->rect().center());
+    QWidget *target = canvas->viewport();
+    QDragEnterEvent enter(dropPt, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(target, &enter);
+    if (!enter.isAccepted()) {
+        std::fprintf(stderr, "SELFTEST FAIL: dragEnter rejected local image\n");
+        return 29;
+    }
+    QDropEvent drop(dropPt, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(target, &drop);
+    if (!dropZone->hasImage()) {
+        std::fprintf(stderr, "SELFTEST FAIL: dropEvent did not import image\n");
+        return 30;
+    }
+
+    std::printf("SELFTEST OK %s (%d layouts, project+pdf+resize+undo+drop)\n", qPrintable(outPath), canvas->layoutCount());
     return 0;
 }

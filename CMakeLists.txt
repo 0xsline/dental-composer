@@ -40,6 +40,7 @@ if(WIN32)
 endif()
 
 if(APPLE)
+    target_link_libraries(dental-composer PRIVATE "-framework CoreFoundation")
     set_target_properties(dental-composer PROPERTIES
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_BUNDLE_NAME "牙片拼图"

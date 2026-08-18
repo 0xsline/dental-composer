@@ -10,6 +10,7 @@
 #include <QGraphicsView>
 #include <QImage>
 #include <QList>
+#include <QPainterPath>
 #include <QPointF>
 #include <QString>
 #include <QStringList>
@@ -17,6 +18,7 @@
 class CanvasView;
 class PhotoZone;
 class QGraphicsSimpleTextItem;
+class QMimeData;
 class QPainterPath;
 
 // 分区定义：位置 + 名称
@@ -33,11 +35,11 @@ struct LayoutSpec
     QList<ZoneSpec> zones;
 };
 
-// 分区内的一张图片：平移、滚轮缩放、拖边缩放、双击适应、可拖到其他分区。
+// 分区内的一张图片：整图等比例缩放，可小于分区；拖边改图片大小，滚轮等比缩放。
 class PhotoItem : public QGraphicsPixmapItem
 {
 public:
-    // 拖边缩放句柄：四角 + 四边中点
+    // 拖边缩放句柄：在图片四角 + 四边中点（不是分区边框）
     enum class ResizeHandle {
         None,
         CornerTopLeft, CornerTopRight, CornerBottomRight, CornerBottomLeft,
@@ -47,14 +49,17 @@ public:
     PhotoItem(const QImage &original, const QImage &display, PhotoZone *zone);
 
     void fitToZone();
-    void zoomBy(qreal factor, const QPointF &scenePos);           // 以场景点为原点缩放
-    void applyResize(ResizeHandle handle, const QPointF &mouseScene); // 以对边/对角为锚点缩放
+    void zoomBy(qreal factor, const QPointF &scenePos);           // 以场景点为原点等比例缩放
+    void applyResize(ResizeHandle handle, const QPointF &mouseScene); // 以图片对边/对角为锚点等比缩放
     QPainterPath localClipPath() const;
+    QRectF imageSceneRect() const;
     PhotoZone *zone() const { return m_zone; }
     QImage image() const { return m_image; }
     QString sourcePath() const { return m_sourcePath; }
     void setSourcePath(const QString &path) { m_sourcePath = path; }
     int type() const override { return UserType + 1; }
+    QRectF boundingRect() const override;
+    QPainterPath shape() const override;
 
 protected:
     void paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget = nullptr) override;
@@ -69,9 +74,13 @@ protected:
 
 private:
     void clampToZone();
+    qreal containScale() const;
+    qreal coverScale() const;
     qreal fitScale() const;
+    qreal minScale() const;
     void applyAnchoredZoom(qreal factor, const QPointF &anchorScene);
     qreal maxScale() const;
+    qreal handlePad() const;
     ResizeHandle handleAt(const QPointF &scenePos) const;
     QPointF resizeAnchor(ResizeHandle handle) const;
     qreal resizeFactor(ResizeHandle handle, const QPointF &mouseScene) const;
@@ -157,12 +166,15 @@ public:
     void undo();                                           // 撤销一步（Ctrl+Z）
     PhotoZone *zoneAt(const QPointF &scenePos) const;
     void requestMoveBetweenZones(PhotoItem *item, const QPointF &scenePos);
+    static bool canAcceptImageDrop(const QMimeData *mime);
+    static QStringList imagePathsFromMime(const QMimeData *mime);
 
 signals:
     void statusMessage(const QString &message);
     void layoutChanged(int index);
 
 protected:
+    bool viewportEvent(QEvent *event) override;
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dragMoveEvent(QDragMoveEvent *event) override;
     void dropEvent(QDropEvent *event) override;

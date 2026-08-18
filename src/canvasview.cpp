@@ -4,8 +4,10 @@
 #include <QDragEnterEvent>
 #include <QDragMoveEvent>
 #include <QDropEvent>
+#include <QEvent>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QMimeData>
 #include <QFocusEvent>
 #include <QGraphicsSceneMouseEvent>
 #include <QGraphicsSceneWheelEvent>
@@ -32,6 +34,15 @@
 #include <QPrinter>
 
 #include <cmath>
+
+#if defined(Q_OS_MAC)
+#include <unistd.h>
+#include <CoreFoundation/CoreFoundation.h>
+#endif
+
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
 
 namespace {
 
@@ -71,18 +82,62 @@ PhotoItem::PhotoItem(const QImage &original, const QImage &display, PhotoZone *z
     fitToZone();
 }
 
-qreal PhotoItem::fitScale() const
+qreal PhotoItem::containScale() const
 {
     if (!m_zone || pixmap().isNull())
         return 1.0;
     const QRectF zr = m_zone->rect();
-    // 覆盖模式：取较大比例，图片始终铺满分区（无留白），可平移/缩放查看细节
+    return qMin(zr.width() / pixmap().width(), zr.height() / pixmap().height());
+}
+
+qreal PhotoItem::coverScale() const
+{
+    if (!m_zone || pixmap().isNull())
+        return 1.0;
+    const QRectF zr = m_zone->rect();
     return qMax(zr.width() / pixmap().width(), zr.height() / pixmap().height());
+}
+
+qreal PhotoItem::fitScale() const
+{
+    // 默认整图可见（contain），保持宽高比
+    return containScale();
+}
+
+qreal PhotoItem::minScale() const
+{
+    if (pixmap().isNull())
+        return 0.05;
+    const qreal minPx = 48.0;
+    return qMax(minPx / qreal(pixmap().width()), minPx / qreal(pixmap().height()));
 }
 
 qreal PhotoItem::maxScale() const
 {
-    return qMax(4.0 * fitScale(), 3.0);
+    return qMax(6.0 * coverScale(), 4.0);
+}
+
+QRectF PhotoItem::imageSceneRect() const
+{
+    return QRectF(pos(), QSizeF(pixmap().size()) * scale());
+}
+
+qreal PhotoItem::handlePad() const
+{
+    return 16.0 / qMax(scale(), 0.01);
+}
+
+QRectF PhotoItem::boundingRect() const
+{
+    const qreal pad = handlePad();
+    return QGraphicsPixmapItem::boundingRect().adjusted(-pad, -pad, pad, pad);
+}
+
+QPainterPath PhotoItem::shape() const
+{
+    QPainterPath path;
+    path.addRect(boundingRect());
+    return path;
 }
 
 void PhotoItem::fitToZone()
@@ -93,7 +148,6 @@ void PhotoItem::fitToZone()
     setScale(s);
     const QRectF zr = m_zone->rect();
     const QSizeF sz = QSizeF(pixmap().size()) * s;
-    // PhotoItem 是顶层条目，坐标为场景坐标，须加上分区原点
     setPos(zr.topLeft() + QPointF((zr.width() - sz.width()) / 2.0, (zr.height() - sz.height()) / 2.0));
     clampToZone();
 }
@@ -104,11 +158,15 @@ void PhotoItem::clampToZone()
         return;
     const QRectF zr = m_zone->rect();
     const QSizeF sz = QSizeF(pixmap().size()) * scale();
-    const qreal minX = zr.right() - sz.width();
-    const qreal minY = zr.bottom() - sz.height();
     QPointF p = pos();
-    p.setX(qBound(minX, p.x(), zr.left()));
-    p.setY(qBound(minY, p.y(), zr.top()));
+    if (sz.width() >= zr.width())
+        p.setX(qBound(zr.right() - sz.width(), p.x(), zr.left()));
+    else
+        p.setX(qBound(zr.left(), p.x(), zr.right() - sz.width()));
+    if (sz.height() >= zr.height())
+        p.setY(qBound(zr.bottom() - sz.height(), p.y(), zr.top()));
+    else
+        p.setY(qBound(zr.top(), p.y(), zr.bottom() - sz.height()));
     setPos(p);
 }
 
@@ -128,16 +186,17 @@ void PhotoItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option,
     QGraphicsPixmapItem::paint(painter, option, widget);
     painter->restore();
 
-    // 悬停或选中时画拖边缩放句柄（分区四角 + 四边中点）
-    if ((isSelected() || m_hovered) && m_zone) {
-        const QPolygonF z = mapFromParent(QRectF(m_zone->rect()));
-        if (z.size() < 4)
-            return;
-        const QPointF c[4] = { z.at(0), z.at(1), z.at(2), z.at(3) };
+    // 句柄画在图片自身四角/边中点（item 坐标），不是分区边框
+    if ((isSelected() || m_hovered) && !pixmap().isNull()) {
+        painter->save();
+        if (m_zone)
+            painter->setClipPath(localClipPath());
+        const QRectF r = QGraphicsPixmapItem::boundingRect();
+        const QPointF c[4] = { r.topLeft(), r.topRight(), r.bottomRight(), r.bottomLeft() };
         const QPointF e[4] = {
             (c[0] + c[1]) / 2, (c[1] + c[2]) / 2, (c[2] + c[3]) / 2, (c[3] + c[0]) / 2
         };
-        const qreal sz = 12.0 / scale();
+        const qreal sz = handlePad();
         painter->setRenderHint(QPainter::Antialiasing, false);
         painter->setPen(QPen(QColor(0x2b, 0x57, 0x9a), qMax(1.0, 1.8 / scale())));
         painter->setBrush(Qt::white);
@@ -145,16 +204,17 @@ void PhotoItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option,
             painter->drawRect(QRectF(c[i].x() - sz / 2, c[i].y() - sz / 2, sz, sz));
             painter->drawRect(QRectF(e[i].x() - sz / 2, e[i].y() - sz / 2, sz, sz));
         }
+        painter->restore();
     }
 }
 
 
 PhotoItem::ResizeHandle PhotoItem::handleAt(const QPointF &scenePos) const
 {
-    if (!m_zone)
+    if (pixmap().isNull())
         return ResizeHandle::None;
-    const QRectF z = m_zone->rect();
-    const qreal r = 14.0; // 命中半径（场景坐标）
+    const QRectF r = imageSceneRect();
+    const qreal hit = 20.0; // 场景坐标命中半径
     static const ResizeHandle corners[4] = {
         ResizeHandle::CornerTopLeft, ResizeHandle::CornerTopRight,
         ResizeHandle::CornerBottomRight, ResizeHandle::CornerBottomLeft
@@ -163,14 +223,14 @@ PhotoItem::ResizeHandle PhotoItem::handleAt(const QPointF &scenePos) const
         ResizeHandle::EdgeTop, ResizeHandle::EdgeRight,
         ResizeHandle::EdgeBottom, ResizeHandle::EdgeLeft
     };
-    const QPointF c[4] = { z.topLeft(), z.topRight(), z.bottomRight(), z.bottomLeft() };
+    const QPointF c[4] = { r.topLeft(), r.topRight(), r.bottomRight(), r.bottomLeft() };
     for (int i = 0; i < 4; ++i) {
-        if (QLineF(scenePos, c[i]).length() <= r)
+        if (QLineF(scenePos, c[i]).length() <= hit)
             return corners[i];
     }
     for (int i = 0; i < 4; ++i) {
         const QPointF mid = (c[i] + c[(i + 1) % 4]) / 2;
-        if (QLineF(scenePos, mid).length() <= r)
+        if (QLineF(scenePos, mid).length() <= hit)
             return edges[i];
     }
     return ResizeHandle::None;
@@ -178,55 +238,54 @@ PhotoItem::ResizeHandle PhotoItem::handleAt(const QPointF &scenePos) const
 
 QPointF PhotoItem::resizeAnchor(ResizeHandle handle) const
 {
-    const QRectF z = m_zone->rect();
+    const QRectF r = imageSceneRect();
     switch (handle) {
     case ResizeHandle::CornerTopLeft:
-        return z.bottomRight();
+        return r.bottomRight();
     case ResizeHandle::CornerTopRight:
-        return z.bottomLeft();
+        return r.bottomLeft();
     case ResizeHandle::CornerBottomRight:
-        return z.topLeft();
+        return r.topLeft();
     case ResizeHandle::CornerBottomLeft:
-        return z.topRight();
+        return r.topRight();
     case ResizeHandle::EdgeLeft:
-        return QPointF(z.right(), z.center().y());
+        return QPointF(r.right(), r.center().y());
     case ResizeHandle::EdgeRight:
-        return QPointF(z.left(), z.center().y());
+        return QPointF(r.left(), r.center().y());
     case ResizeHandle::EdgeTop:
-        return QPointF(z.center().x(), z.bottom());
+        return QPointF(r.center().x(), r.bottom());
     case ResizeHandle::EdgeBottom:
-        return QPointF(z.center().x(), z.top());
+        return QPointF(r.center().x(), r.top());
     default:
-        return z.center();
+        return r.center();
     }
 }
 
 qreal PhotoItem::resizeFactor(ResizeHandle handle, const QPointF &mouseScene) const
 {
-    const QRectF z = m_zone->rect();
+    const QRectF r = imageSceneRect();
     const QPointF anchor = resizeAnchor(handle);
     switch (handle) {
     case ResizeHandle::EdgeLeft:
     case ResizeHandle::EdgeRight: {
-        const qreal d0 = qAbs(z.center().x() - anchor.x());
+        const qreal d0 = qAbs(r.center().x() - anchor.x());
         const qreal d1 = qAbs(mouseScene.x() - anchor.x());
         return d1 / qMax(d0, 1.0);
     }
     case ResizeHandle::EdgeTop:
     case ResizeHandle::EdgeBottom: {
-        const qreal d0 = qAbs(z.center().y() - anchor.y());
+        const qreal d0 = qAbs(r.center().y() - anchor.y());
         const qreal d1 = qAbs(mouseScene.y() - anchor.y());
         return d1 / qMax(d0, 1.0);
     }
     default: {
-        // 角：对角线距离比（等比缩放）
-        QPointF corner = z.topLeft();
+        QPointF corner = r.topLeft();
         if (handle == ResizeHandle::CornerTopRight)
-            corner = z.topRight();
+            corner = r.topRight();
         else if (handle == ResizeHandle::CornerBottomRight)
-            corner = z.bottomRight();
+            corner = r.bottomRight();
         else if (handle == ResizeHandle::CornerBottomLeft)
-            corner = z.bottomLeft();
+            corner = r.bottomLeft();
         const qreal d0 = QLineF(corner, anchor).length();
         const qreal d1 = QLineF(mouseScene, anchor).length();
         return d1 / qMax(d0, 1.0);
@@ -236,33 +295,15 @@ qreal PhotoItem::resizeFactor(ResizeHandle handle, const QPointF &mouseScene) co
 
 void PhotoItem::applyAnchoredZoom(qreal factor, const QPointF &anchorScene)
 {
-    if (!m_zone)
+    if (pixmap().isNull())
         return;
     const qreal s0 = scale();
+    if (s0 <= 0.0)
+        return;
     const QPointF P0 = pos();
-    const QSizeF S0 = QSizeF(pixmap().size()) * s0;
-    const QRectF Z = m_zone->rect();
-    // 锚点相对图像左上的偏移（场景单位 @s0）
-    const qreal ax = anchorScene.x() - P0.x();
-    const qreal ay = anchorScene.y() - P0.y();
-    // 满足"图片仍覆盖分区"的最小缩放因子：图像四边不得越过分区四边
-    qreal fmin = 0.0;
-    if (ax > 0.0)
-        fmin = qMax(fmin, (anchorScene.x() - Z.left()) / ax);
-    if (ay > 0.0)
-        fmin = qMax(fmin, (anchorScene.y() - Z.top()) / ay);
-    const qreal rx = S0.width() - ax;
-    const qreal ry = S0.height() - ay;
-    if (rx > 0.0)
-        fmin = qMax(fmin, (Z.right() - anchorScene.x()) / rx);
-    if (ry > 0.0)
-        fmin = qMax(fmin, (Z.bottom() - anchorScene.y()) / ry);
-    fmin = qBound(0.0, fmin, 1.0);
-    // 实际因子：不小于覆盖下限、不超过最大缩放
-    const qreal s = qBound(s0 * qMax(factor, fmin), fitScale(), maxScale());
+    const qreal s = qBound(minScale(), s0 * factor, maxScale());
     const qreal f = s / s0;
     setScale(s);
-    // 锚点绝对不动，覆盖约束已由 fmin 保证；clamp 仅作浮点误差兜底
     setPos(anchorScene - (anchorScene - P0) * f);
     clampToZone();
 }
@@ -290,8 +331,7 @@ void PhotoItem::hoverLeaveEvent(QGraphicsSceneHoverEvent *event)
 
 void PhotoItem::hoverMoveEvent(QGraphicsSceneHoverEvent *event)
 {
-    // 仅选中状态显示缩放光标，避免与"抓边缘拖动图片"冲突
-    if (isSelected()) {
+    if (handleAt(event->scenePos()) != ResizeHandle::None) {
         switch (handleAt(event->scenePos())) {
         case ResizeHandle::CornerTopLeft:
         case ResizeHandle::CornerBottomRight:
@@ -322,18 +362,17 @@ void PhotoItem::hoverMoveEvent(QGraphicsSceneHoverEvent *event)
 void PhotoItem::mousePressEvent(QGraphicsSceneMouseEvent *event)
 {
     if (event->button() == Qt::LeftButton) {
-        // 已选中且按住拖边句柄 → 缩放；其余一律平移/选中（避免抓图片边缘拖动时误触缩放）
-        if (isSelected()) {
-            const ResizeHandle handle = handleAt(event->scenePos());
-            if (handle != ResizeHandle::None) {
-                if (CanvasView *view = viewFor(this))
-                    view->pushUndoSnapshot();
-                m_resizing = true;
-                m_resizeHandle = handle;
-                m_resizeAnchor = resizeAnchor(handle);
-                event->accept();
-                return;
-            }
+        // 点在图片句柄上 → 等比改大小；点在图内 → 平移
+        const ResizeHandle handle = handleAt(event->scenePos());
+        if (handle != ResizeHandle::None) {
+            if (CanvasView *view = viewFor(this))
+                view->pushUndoSnapshot();
+            m_resizing = true;
+            m_resizeHandle = handle;
+            m_resizeAnchor = resizeAnchor(handle);
+            setSelected(true);
+            event->accept();
+            return;
         }
         if (CanvasView *view = viewFor(this))
             view->pushUndoSnapshot();
@@ -392,22 +431,26 @@ void PhotoItem::zoomBy(qreal factor, const QPointF &scenePos)
 
 void PhotoItem::wheelEvent(QGraphicsSceneWheelEvent *event)
 {
-    QT_WARNING_PUSH
-    QT_WARNING_DISABLE_DEPRECATED
-    const int dy = event->delta();
-    QT_WARNING_POP
+    int dy = event->delta();
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    if (dy == 0)
+        dy = event->pixelDelta().y();
+#endif
     if (dy == 0) {
         event->ignore();
         return;
     }
-    // 一次连续滚动只记一个撤销快照
     if (m_lastWheelUndo.elapsed() > 800) {
         if (CanvasView *view = viewFor(this))
             view->pushUndoSnapshot();
         m_lastWheelUndo.restart();
     }
-    // 以分区中心为固定中心点缩放（体验更稳，不随光标漂移）
-    zoomBy(std::pow(1.15, dy / 120.0), m_zone ? m_zone->rect().center() : event->scenePos());
+    qreal notches = dy / 120.0;
+    if (qAbs(notches) < 0.35)
+        notches = (dy > 0) ? 0.35 : -0.35;
+    notches = qBound(-2.0, notches, 2.0);
+    // 绕图片中心等比例缩放，可小于分区
+    zoomBy(std::pow(1.15, notches), imageSceneRect().center());
     event->accept();
 }
 
@@ -642,10 +685,105 @@ void CanvasView::applyLayout(int index)
 
 bool CanvasView::isImageFile(const QString &path)
 {
+    if (path.isEmpty())
+        return false;
     const QString s = QFileInfo(path).suffix().toLower();
-    return s == QStringLiteral("png") || s == QStringLiteral("jpg") || s == QStringLiteral("jpeg")
+    if (s == QStringLiteral("png") || s == QStringLiteral("jpg") || s == QStringLiteral("jpeg")
         || s == QStringLiteral("bmp") || s == QStringLiteral("gif")
-        || s == QStringLiteral("tif") || s == QStringLiteral("tiff");
+        || s == QStringLiteral("tif") || s == QStringLiteral("tiff")
+        || s == QStringLiteral("heic") || s == QStringLiteral("heif")
+        || s == QStringLiteral("webp"))
+        return true;
+    if (s.isEmpty() || path.contains(QLatin1String("/.file/")))
+        return false;
+    QImageReader reader(path);
+    return reader.canRead();
+}
+
+static QString localPathFromUrl(const QUrl &url)
+{
+    QString path = url.toLocalFile();
+    if (!path.isEmpty() && !path.contains(QLatin1String("/.file/")) && QFileInfo::exists(path))
+        return path;
+
+#if defined(Q_OS_MAC)
+    const QByteArray enc = url.toEncoded();
+    CFURLRef cfUrl = CFURLCreateWithBytes(kCFAllocatorDefault,
+        reinterpret_cast<const UInt8 *>(enc.constData()),
+        enc.size(), kCFStringEncodingUTF8, nullptr);
+    if (cfUrl) {
+        char buf[PATH_MAX];
+        if (CFURLGetFileSystemRepresentation(cfUrl, true,
+                reinterpret_cast<UInt8 *>(buf), sizeof(buf))) {
+            const QString resolved = QString::fromUtf8(buf);
+            if (!resolved.isEmpty())
+                path = resolved;
+        }
+        CFRelease(cfUrl);
+    }
+#endif
+
+    if (path.isEmpty() && url.scheme() == QLatin1String("file"))
+        path = url.path();
+    return path;
+}
+
+bool CanvasView::canAcceptImageDrop(const QMimeData *mime)
+{
+    if (!mime)
+        return false;
+    if (mime->hasImage())
+        return true;
+    if (mime->hasUrls()) {
+        const QList<QUrl> urls = mime->urls();
+        if (urls.isEmpty())
+            return true; // Finder 可能在 enter 时还没解析出路径
+        for (const QUrl &url : urls) {
+            if (url.isLocalFile() || url.scheme() == QLatin1String("file"))
+                return true;
+            const QString path = localPathFromUrl(url);
+            if (isImageFile(path))
+                return true;
+        }
+    }
+    const QStringList formats = mime->formats();
+    for (const QString &fmt : formats) {
+        const QString lower = fmt.toLower();
+        if (lower.contains(QLatin1String("uri-list"))
+            || lower.contains(QLatin1String("file-url"))
+            || lower.contains(QLatin1String("filename"))
+            || lower.contains(QLatin1String("file-name")))
+            return true;
+    }
+    return false;
+}
+
+QStringList CanvasView::imagePathsFromMime(const QMimeData *mime)
+{
+    QStringList out;
+    if (!mime)
+        return out;
+
+    QList<QUrl> urls = mime->urls();
+    if (urls.isEmpty() && mime->hasFormat(QStringLiteral("text/uri-list"))) {
+        const QByteArray data = mime->data(QStringLiteral("text/uri-list"));
+        const QList<QByteArray> lines = data.split('\n');
+        for (const QByteArray &line : lines) {
+            const QByteArray trimmed = line.trimmed();
+            if (trimmed.isEmpty() || trimmed.startsWith('#'))
+                continue;
+            urls.append(QUrl::fromEncoded(trimmed));
+        }
+    }
+
+    for (const QUrl &url : urls) {
+        const QString path = localPathFromUrl(url);
+        if (path.isEmpty())
+            continue;
+        if (isImageFile(path) || QImageReader(path).canRead())
+            out << path;
+    }
+    return out;
 }
 
 PhotoZone *CanvasView::zoneAt(const QPointF &scenePos) const
@@ -1033,40 +1171,56 @@ void CanvasView::undo()
 // 事件处理
 // ---------------------------------------------------------------------------
 
+bool CanvasView::viewportEvent(QEvent *event)
+{
+    // QGraphicsView 默认把拖放交给 scene，空 scene 会 ignore，Finder 拖入永远进不来。
+    switch (event->type()) {
+    case QEvent::DragEnter:
+        dragEnterEvent(static_cast<QDragEnterEvent *>(event));
+        return true;
+    case QEvent::DragMove:
+        dragMoveEvent(static_cast<QDragMoveEvent *>(event));
+        return true;
+    case QEvent::DragLeave:
+        event->accept();
+        return true;
+    case QEvent::Drop:
+        dropEvent(static_cast<QDropEvent *>(event));
+        return true;
+    default:
+        return QGraphicsView::viewportEvent(event);
+    }
+}
+
 void CanvasView::dragEnterEvent(QDragEnterEvent *event)
 {
-    if (!event->mimeData()->hasUrls()) {
-        event->ignore();
+    if (canAcceptImageDrop(event->mimeData())) {
+        event->setDropAction(Qt::CopyAction);
+        event->acceptProposedAction();
         return;
-    }
-    const QList<QUrl> urls = event->mimeData()->urls();
-    for (const QUrl &url : urls) {
-        if (isImageFile(url.toLocalFile())) {
-            event->acceptProposedAction();
-            return;
-        }
     }
     event->ignore();
 }
 
 void CanvasView::dragMoveEvent(QDragMoveEvent *event)
 {
-    event->acceptProposedAction();
+    if (canAcceptImageDrop(event->mimeData())) {
+        event->setDropAction(Qt::CopyAction);
+        event->acceptProposedAction();
+        return;
+    }
+    event->ignore();
 }
 
 void CanvasView::dropEvent(QDropEvent *event)
 {
-    QStringList files;
-    const QList<QUrl> urls = event->mimeData()->urls();
-    for (const QUrl &url : urls) {
-        const QString path = url.toLocalFile();
-        if (!path.isEmpty() && isImageFile(path))
-            files << path;
-    }
+    const QStringList files = imagePathsFromMime(event->mimeData());
     if (files.isEmpty()) {
         event->ignore();
+        emit statusMessage(tr("无法读取拖入的图片"));
         return;
     }
+    event->setDropAction(Qt::CopyAction);
     event->acceptProposedAction();
 
     int index = 0;
@@ -1086,7 +1240,8 @@ void CanvasView::dropEvent(QDropEvent *event)
         if (importInto(zone, files.at(index)))
             ++count;
     }
-    emit statusMessage(tr("已导入 %1 张图片").arg(count));
+    if (count > 0)
+        emit statusMessage(tr("已导入 %1 张图片").arg(count));
 }
 
 void CanvasView::mouseDoubleClickEvent(QMouseEvent *event)

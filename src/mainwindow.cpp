@@ -88,7 +88,15 @@ MainWindow::MainWindow(QWidget *parent)
     toolBar->addWidget(m_fontSize);
 
     m_colorButton = new QToolButton(toolBar);
+    m_colorButton->setText(tr("颜色"));
+    m_colorButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    m_colorButton->setAutoRaise(false);
+    m_colorButton->setCursor(Qt::PointingHandCursor);
     m_colorButton->setToolTip(tr("文字颜色（选中文字时直接生效）"));
+    m_colorButton->setStyleSheet(
+        QStringLiteral("QToolButton { padding: 2px 8px 2px 4px; border: 1px solid #8a8a8a; "
+                       "border-radius: 4px; background: #f3f3f3; color: #1a1a1a; }"
+                       "QToolButton:hover { border-color: #3b82f6; background: #ffffff; }"));
     toolBar->addWidget(m_colorButton);
 
     toolBar->addSeparator();
@@ -130,7 +138,7 @@ MainWindow::MainWindow(QWidget *parent)
     m_canvas->setTextStyle(m_fontSize->value(), m_textColor);
     updateColorButton();
 
-    const QString hint = tr("拖入图片到任意分区 · 双击文字编辑 · 滚轮缩放 · 双击图片适应分区");
+    const QString hint = tr("拖入图片到任意分区 · 滚轮等比缩放 · 拖图片边角改大小 · 双击图片适应分区");
     statusBar()->showMessage(hint);
     connect(m_canvas, &CanvasView::statusMessage, this, [this, hint](const QString &message) {
         statusBar()->showMessage(message, 5000);
@@ -141,10 +149,21 @@ MainWindow::MainWindow(QWidget *parent)
 
 void MainWindow::updateColorButton()
 {
-    QPixmap pixmap(20, 20);
-    pixmap.fill(m_textColor);
+    const int s = 22;
+    QPixmap pixmap(s, s);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const QRectF box(1.5, 1.5, s - 3.0, s - 3.0);
+    painter.setPen(QPen(QColor(0, 0, 0, 90), 1.0));
+    painter.setBrush(m_textColor);
+    painter.drawRoundedRect(box, 4.0, 4.0);
+    painter.setPen(QPen(QColor(255, 255, 255, 230), 1.0));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRoundedRect(box.adjusted(1.0, 1.0, -1.0, -1.0), 3.0, 3.0);
+    painter.end();
     m_colorButton->setIcon(QIcon(pixmap));
-    m_colorButton->setIconSize(QSize(20, 20));
+    m_colorButton->setIconSize(QSize(s, s));
 }
 
 void MainWindow::onImport()
