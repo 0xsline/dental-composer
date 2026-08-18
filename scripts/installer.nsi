@@ -22,17 +22,25 @@ UninstPage uninstConfirm
 UninstPage instfiles
 
 Section "Install"
-  ; 检测程序是否正在运行（文件被占用会导致覆盖失败）
+  ; 检测程序是否正在运行（文件被占用会导致覆盖失败），可一键自动关闭
   nsExec::ExecToStack 'tasklist /FI "IMAGENAME eq dental-composer.exe" /NH'
   Pop $0
   Pop $1
   ${If} $1 != ""
     StrCpy $2 $1 4
     ${If} $2 != "INFO"
-      MessageBox MB_ICONEXCLAMATION|MB_OK "检测到牙片拼图正在运行。请先关闭程序（任务栏右键关闭，或任务管理器结束 dental-composer.exe），再重新运行安装包。"
-      Abort
+      MessageBox MB_ICONEXCLAMATION|MB_YESNO "检测到牙片拼图正在运行。$\r$\n点「是」自动关闭并继续安装；点「否」取消安装。" IDYES killproc IDNO giveup
+killproc:
+      nsExec::ExecToStack 'taskkill /F /IM dental-composer.exe'
+      Pop $0
+      Pop $1
+      Sleep 1000
     ${EndIf}
   ${EndIf}
+  Goto continueinstall
+giveup:
+  Abort
+continueinstall:
 
   ; 清除旧文件只读属性，避免覆盖失败
   ${If} ${FileExists} "$INSTDIR\dental-composer.exe"
