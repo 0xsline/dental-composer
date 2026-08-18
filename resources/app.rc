@@ -4,8 +4,8 @@
 #include <windows.h>
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 0,1,3,0
- PRODUCTVERSION 0,1,3,0
+ FILEVERSION 0,1,5,0
+ PRODUCTVERSION 0,1,5,0
  FILEFLAGSMASK 0x3fL
  FILEFLAGS 0x0L
  FILEOS VOS_NT_WINDOWS32
@@ -18,11 +18,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "晨旭口腔"
             VALUE "FileDescription", "牙片拼图 - 牙科影像拼图工具"
-            VALUE "FileVersion", "0.1.3.0"
+            VALUE "FileVersion", "0.1.5.0"
             VALUE "InternalName", "dental-composer"
             VALUE "OriginalFilename", "dental-composer.exe"
             VALUE "ProductName", "牙片拼图"
-            VALUE "ProductVersion", "0.1.3.0"
+            VALUE "ProductVersion", "0.1.5.0"
             VALUE "LegalCopyright", "Copyright (C) 2026 晨旭口腔"
         END
     END

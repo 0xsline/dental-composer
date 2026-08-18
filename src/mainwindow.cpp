@@ -362,7 +362,7 @@ void MainWindow::onSaveProject()
         return;
     rememberDir(kLastExportDir, path);
     if (m_canvas->saveProject(path))
-        statusBar()->showMessage(tr("已保存工程：%1").arg(QFileInfo(path).fileName()), 8000);
+        statusBar()->showMessage(tr("已保存工程（图片已打包）：%1").arg(QFileInfo(path).fileName()), 8000);
     else
         QMessageBox::warning(this, tr("保存失败"), tr("无法写入文件：\n%1").arg(path));
 }
@@ -382,8 +382,8 @@ void MainWindow::onOpenProject()
 void MainWindow::onAbout()
 {
     QMessageBox::about(this, tr("关于牙片拼图"),
-        tr("<b>牙片拼图</b> v0.1.3<br><br>"
-           "牙科影像四格/三格拼图工具：图片拖放、患者信息、文字叠加、高清导出与打印。"
+        tr("<b>牙片拼图</b> v0.1.5<br><br>"
+           "牙科影像四格/三格/自由拼图工具：图片拖放、患者信息、文字叠加、高清导出与打印。"
            "<br>支持 Win7 SP1 64 位及以上、macOS。<br><br>"
            "作者：晨旭口腔 · 袁萍医生团队"));
 }

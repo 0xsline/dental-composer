@@ -81,6 +81,14 @@ jobs:
           & $signtool.FullName sign /f $pfx /p $env:CERT_PASSWORD /fd sha256 `
               /tr http://timestamp.digicert.com /td sha256 build-win/Release/dental-composer.exe
 
+      - name: Selftest (offscreen)
+        shell: pwsh
+        run: |
+          $env:QT_QPA_PLATFORM = "offscreen"
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\dc" | Out-Null
+          & build-win\Release\dental-composer.exe --selftest "$env:RUNNER_TEMP\dc\selftest.png"
+          if ($LASTEXITCODE -ne 0) { throw "selftest failed: $LASTEXITCODE" }
+
       - name: Build NSIS installer
         working-directory: scripts
         run: makensis /DAPP_DIR=..\build-win\Release installer.nsi
@@ -90,4 +98,4 @@ jobs:
           name: dental-composer-win7-x64
           path: |
             build-win/Release/**
-            scripts/DentalComposer-0.1.0-Win7-x64-setup.exe
+            scripts/DentalComposer-0.1.5-Win7-x64-setup.exe

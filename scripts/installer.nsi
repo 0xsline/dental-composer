@@ -10,7 +10,7 @@
 
 Name "牙片拼图"
 Caption "牙片拼图 安装"
-OutFile "DentalComposer-0.1.0-Win7-x64-setup.exe"
+OutFile "DentalComposer-0.1.5-Win7-x64-setup.exe"
 InstallDir "$PROGRAMFILES64\DentalComposer"
 RequestExecutionLevel admin
 Unicode true
@@ -59,7 +59,7 @@ continueinstall:
   CreateShortCut "$SMPROGRAMS\牙片拼图\牙片拼图.lnk" "$INSTDIR\dental-composer.exe"
   CreateShortCut "$SMPROGRAMS\牙片拼图\卸载.lnk" "$INSTDIR\uninstall.exe"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DentalComposer" "DisplayName" "牙片拼图"
-  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DentalComposer" "DisplayVersion" "0.1.3"
+  WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DentalComposer" "DisplayVersion" "0.1.5"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DentalComposer" "Publisher" "晨旭口腔"
   WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\DentalComposer" "UninstallString" "$\"$INSTDIR\uninstall.exe$\""
 SectionEnd

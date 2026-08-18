@@ -18,6 +18,8 @@
 #include <QMouseEvent>
 #include <QGuiApplication>
 #include <QClipboard>
+#include <QContextMenuEvent>
+#include <QMenu>
 #include <QPainter>
 #include <QPainterPath>
 #include <QTransform>
@@ -27,6 +29,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <QWheelEvent>
+#include <QBuffer>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -64,6 +67,60 @@ CanvasView *viewFor(QGraphicsItem *item)
     const QColor kLabelText(0x3e, 0x5b, 0x46);     // 分区角标
     const QColor kViewBg(0xb3, 0xd8, 0xb8);        // 画布外留白
 
+QString embedFormatForPath(const QString &path)
+{
+    const QString suffix = QFileInfo(path).suffix().toLower();
+    if (suffix == QLatin1String("jpg") || suffix == QLatin1String("jpeg"))
+        return QStringLiteral("JPEG");
+    return QStringLiteral("PNG");
+}
+
+QByteArray encodeEmbeddedImage(const QImage &image)
+{
+    QByteArray bytes;
+    QBuffer buffer(&bytes);
+    buffer.open(QIODevice::WriteOnly);
+    if (image.hasAlphaChannel())
+        image.save(&buffer, "PNG");
+    else
+        image.save(&buffer, "JPEG", 92);
+    return bytes;
+}
+
+QImage imageFromZoneObject(const QJsonObject &o, QString *pathOut, int *rotationOut)
+{
+    const QString imagePath = o.value(QStringLiteral("image")).toString();
+    if (pathOut)
+        *pathOut = imagePath;
+    int rotation = o.value(QStringLiteral("rotation")).toInt(0);
+
+    const QString b64 = o.value(QStringLiteral("imageData")).toString();
+    if (!b64.isEmpty()) {
+        const QByteArray raw = QByteArray::fromBase64(b64.toLatin1());
+        QImage embedded;
+        if (embedded.loadFromData(raw)) {
+            if (rotationOut)
+                *rotationOut = rotation;
+            return embedded;
+        }
+    }
+
+    if (!imagePath.isEmpty() && QFileInfo::exists(imagePath)) {
+        QImageReader reader(imagePath);
+        reader.setAutoTransform(true);
+        const QImage image = reader.read();
+        if (!image.isNull()) {
+            if (rotationOut)
+                *rotationOut = rotation;
+            return image;
+        }
+    }
+
+    if (rotationOut)
+        *rotationOut = 0;
+    return QImage();
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -85,19 +142,28 @@ PhotoItem::PhotoItem(const QImage &original, const QImage &display, PhotoZone *z
     fitToZone();
 }
 
+QRectF PhotoItem::boardRect() const
+{
+    if (m_zone)
+        return m_zone->rect();
+    if (scene())
+        return scene()->sceneRect().adjusted(28.0, 28.0, -28.0, -28.0);
+    return QRectF();
+}
+
 qreal PhotoItem::containScale() const
 {
-    if (!m_zone || pixmap().isNull())
+    const QRectF zr = boardRect();
+    if (zr.isEmpty() || pixmap().isNull())
         return 1.0;
-    const QRectF zr = m_zone->rect();
     return qMin(zr.width() / pixmap().width(), zr.height() / pixmap().height());
 }
 
 qreal PhotoItem::coverScale() const
 {
-    if (!m_zone || pixmap().isNull())
+    const QRectF zr = boardRect();
+    if (zr.isEmpty() || pixmap().isNull())
         return 1.0;
-    const QRectF zr = m_zone->rect();
     return qMax(zr.width() / pixmap().width(), zr.height() / pixmap().height());
 }
 
@@ -156,8 +222,8 @@ void PhotoItem::refreshDisplayPixmap()
     if (m_image.isNull())
         return;
     QImage display = m_image;
-    if (m_zone) {
-        const QRectF zr = m_zone->rect();
+    const QRectF zr = boardRect();
+    if (!zr.isEmpty()) {
         const qreal ratio = qMin(zr.width() * 3.0 / m_image.width(),
                                  zr.height() * 3.0 / m_image.height());
         if (ratio < 1.0)
@@ -195,21 +261,36 @@ void PhotoItem::rotateBy90(int quarterTurns)
 
 void PhotoItem::fitToZone()
 {
-    if (!m_zone)
+    const QRectF zr = boardRect();
+    if (zr.isEmpty() || pixmap().isNull())
         return;
     const qreal s = fitScale();
     setScale(s);
-    const QRectF zr = m_zone->rect();
     const QSizeF sz = QSizeF(pixmap().size()) * s;
     setPos(zr.topLeft() + QPointF((zr.width() - sz.width()) / 2.0, (zr.height() - sz.height()) / 2.0));
     clampToZone();
 }
 
+void PhotoItem::placeCentered(const QPointF &sceneCenter, qreal boardFraction)
+{
+    const QRectF zr = boardRect();
+    if (zr.isEmpty() || pixmap().isNull())
+        return;
+    const qreal frac = qBound(0.08, boardFraction, 1.0);
+    const qreal s = qMin(containScale(),
+                         qMin(zr.width() * frac / pixmap().width(),
+                              zr.height() * frac / pixmap().height()));
+    setScale(qBound(minScale(), s, maxScale()));
+    const QSizeF sz = QSizeF(pixmap().size()) * scale();
+    setPos(sceneCenter - QPointF(sz.width() / 2.0, sz.height() / 2.0));
+    clampToZone();
+}
+
 void PhotoItem::clampToZone()
 {
-    if (!m_zone)
+    const QRectF zr = boardRect();
+    if (zr.isEmpty())
         return;
-    const QRectF zr = m_zone->rect();
     const QSizeF sz = QSizeF(pixmap().size()) * scale();
     QPointF p = pos();
     if (sz.width() >= zr.width())
@@ -227,8 +308,9 @@ void PhotoItem::clampToZone()
 QPainterPath PhotoItem::localClipPath() const
 {
     QPainterPath path;
-    if (m_zone)
-        path.addPolygon(mapFromParent(QRectF(m_zone->rect())));
+    const QRectF zr = boardRect();
+    if (!zr.isEmpty())
+        path.addPolygon(mapFromParent(zr));
     return path;
 }
 
@@ -242,7 +324,7 @@ void PhotoItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option,
     // 句柄画在图片自身四角/边中点（item 坐标），不是分区边框
     if ((isSelected() || m_hovered) && !pixmap().isNull()) {
         painter->save();
-        if (m_zone)
+        if (!boardRect().isEmpty())
             painter->setClipPath(localClipPath());
         const QRectF r = QGraphicsPixmapItem::boundingRect();
         const QPointF c[4] = { r.topLeft(), r.topRight(), r.bottomRight(), r.bottomLeft() };
@@ -415,6 +497,8 @@ void PhotoItem::hoverMoveEvent(QGraphicsSceneHoverEvent *event)
 void PhotoItem::mousePressEvent(QGraphicsSceneMouseEvent *event)
 {
     if (event->button() == Qt::LeftButton) {
+        if (CanvasView *view = viewFor(this))
+            view->raisePhoto(this);
         // 点在图片句柄上 → 等比改大小；点在图内 → 平移
         const ResizeHandle handle = handleAt(event->scenePos());
         if (handle != ResizeHandle::None) {
@@ -560,7 +644,17 @@ void PhotoZone::paint(QPainter *painter, const QStyleOptionGraphicsItem *, QWidg
     QPainterPath path;
     path.addRoundedRect(r, 10.0, 10.0);
     painter->fillPath(path, kZoneBg);
-    if (hasImage()) {
+    bool occupied = hasImage();
+    if (!occupied && scene()) {
+        const QList<QGraphicsItem *> hits = scene()->items(r);
+        for (QGraphicsItem *it : hits) {
+            if (dynamic_cast<PhotoItem *>(it)) {
+                occupied = true;
+                break;
+            }
+        }
+    }
+    if (occupied) {
         painter->setPen(QPen(kZoneBorderFull, 1.0));
         painter->drawPath(path);
     } else {
@@ -570,7 +664,9 @@ void PhotoZone::paint(QPainter *painter, const QStyleOptionGraphicsItem *, QWidg
         f.setPixelSize(22);
         painter->setFont(f);
         painter->setPen(kZoneHint);
-        painter->drawText(r, Qt::AlignCenter, QStringLiteral("拖入图片 或 双击导入"));
+        painter->drawText(r, Qt::AlignCenter,
+                          m_label.isEmpty() ? QStringLiteral("拖入图片，自由摆放")
+                                            : QStringLiteral("拖入图片 或 双击导入"));
     }
 }
 
@@ -633,6 +729,8 @@ CanvasView::CanvasView(QWidget *parent)
     setFocusPolicy(Qt::StrongFocus);
     setAcceptDrops(true);
     viewport()->setAcceptDrops(true);
+    setContextMenuPolicy(Qt::DefaultContextMenu);
+    viewport()->setContextMenuPolicy(Qt::DefaultContextMenu);
 
     setBackgroundBrush(kViewBg);
     m_scene.setBackgroundBrush(kSceneBg);
@@ -672,6 +770,12 @@ static const QList<LayoutSpec> &layoutTemplates()
                  << ZoneSpec{ QRectF(margin, margin + zh + gap, ww, zh), QStringLiteral("上下颌") };
         list << s3;
 
+        LayoutSpec s4;
+        s4.name = QStringLiteral("自由拼图");
+        s4.freeform = true;
+        s4.zones << ZoneSpec{ QRectF(margin, margin, ww, H - 2 * margin), QString() };
+        list << s4;
+
         return list;
     }();
     return templates;
@@ -694,6 +798,13 @@ QString CanvasView::layoutName(int index) const
     if (index >= 0 && index < templates.size())
         return templates.at(index).name;
     return QString();
+}
+
+bool CanvasView::isFreeLayout() const
+{
+    const QList<LayoutSpec> &templates = layoutTemplates();
+    return m_layoutIndex >= 0 && m_layoutIndex < templates.size()
+        && templates.at(m_layoutIndex).freeform;
 }
 
 void CanvasView::applyLayout(int index)
@@ -719,19 +830,22 @@ void CanvasView::applyLayout(int index)
         auto *zone = new PhotoZone(zs.rect, zs.label, nullptr);
         m_scene.addItem(zone);
 
-        auto *labelItem = m_scene.addSimpleText(zs.label);
-        QFont f = labelItem->font();
-        f.setPixelSize(20);
-        labelItem->setFont(f);
-        labelItem->setBrush(kLabelText);
-        labelItem->setPos(zs.rect.topLeft() + QPointF(12.0, 8.0));
-        labelItem->setZValue(10);
-        zone->setLabelItem(labelItem);
+        if (!zs.label.isEmpty()) {
+            auto *labelItem = m_scene.addSimpleText(zs.label);
+            QFont f = labelItem->font();
+            f.setPixelSize(20);
+            labelItem->setFont(f);
+            labelItem->setBrush(kLabelText);
+            labelItem->setPos(zs.rect.topLeft() + QPointF(12.0, 8.0));
+            labelItem->setZValue(10);
+            zone->setLabelItem(labelItem);
+        }
 
         m_zones.append(zone);
     }
 
     m_layoutIndex = index;
+    m_topZ = 1;
     emit layoutChanged(index);
     fitScene();
 }
@@ -874,24 +988,84 @@ bool CanvasView::importInto(PhotoZone *zone, const QString &path)
 void CanvasView::importImages(const QStringList &files)
 {
     int count = 0;
-    for (const QString &file : files) {
-        PhotoZone *zone = firstEmptyZone();
-        if (!zone) {
-            emit statusMessage(tr("分区已满，剩余图片已忽略"));
-            break;
+    if (isFreeLayout()) {
+        PhotoZone *board = m_zones.isEmpty() ? nullptr : m_zones.first();
+        const QRectF boardRect = board ? board->rect() : m_scene.sceneRect().adjusted(28, 28, -28, -28);
+        QPointF origin = boardRect.center();
+        int offset = 0;
+        for (const QString &file : files) {
+            QImageReader reader(file);
+            reader.setAutoTransform(true);
+            const QImage image = reader.read();
+            if (image.isNull()) {
+                emit statusMessage(tr("无法读取图片：%1").arg(QFileInfo(file).fileName()));
+                continue;
+            }
+            const QPointF at = origin + QPointF(offset * 36.0, offset * 36.0);
+            if (addFreeImage(image, file, at))
+                ++count;
+            ++offset;
         }
-        if (importInto(zone, file))
-            ++count;
+    } else {
+        for (const QString &file : files) {
+            PhotoZone *zone = firstEmptyZone();
+            if (!zone) {
+                emit statusMessage(tr("分区已满，剩余图片已忽略"));
+                break;
+            }
+            if (importInto(zone, file))
+                ++count;
+        }
     }
     if (count > 0)
         emit statusMessage(tr("已导入 %1 张图片").arg(count));
+}
+
+PhotoItem *CanvasView::addFreeImage(const QImage &image, const QString &path, const QPointF &sceneCenter)
+{
+    if (image.isNull())
+        return nullptr;
+    PhotoZone *board = m_zones.isEmpty() ? nullptr : m_zones.first();
+    QImage display = image;
+    const QRectF zr = board ? board->rect() : m_scene.sceneRect().adjusted(28, 28, -28, -28);
+    if (!zr.isEmpty()) {
+        const qreal ratio = qMin(zr.width() * 3.0 / image.width(), zr.height() * 3.0 / image.height());
+        if (ratio < 1.0)
+            display = image.scaled(QSize(int(image.width() * ratio), int(image.height() * ratio)),
+                                   Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+    pushUndoSnapshot();
+    auto *item = new PhotoItem(image, display, board);
+    item->setSourcePath(path);
+    item->setZValue(++m_topZ);
+    m_scene.addItem(item);
+    item->placeCentered(sceneCenter, 0.42);
+    m_looseItems.append(item);
+    return item;
+}
+
+void CanvasView::raisePhoto(PhotoItem *item)
+{
+    if (!item)
+        return;
+    item->setZValue(++m_topZ);
+}
+
+void CanvasView::removeLoosePhoto(PhotoItem *photo)
+{
+    if (!photo)
+        return;
+    m_looseItems.removeAll(photo);
+    if (photo->scene())
+        photo->scene()->removeItem(photo);
+    delete photo;
 }
 
 TextItem *CanvasView::createTextItem(const QString &text)
 {
     auto *item = new TextItem(text);
     m_scene.addItem(item);
-    item->setZValue(20);
+    item->setZValue(500);
     QFont f = item->font();
     f.setPixelSize(m_textPixelSize);
     item->setFont(f);
@@ -974,7 +1148,9 @@ void CanvasView::removeSelected()
     pushUndoSnapshot();
     for (QGraphicsItem *item : selected) {
         if (auto *photo = dynamic_cast<PhotoItem *>(item)) {
-            if (PhotoZone *zone = photo->zone())
+            if (m_looseItems.contains(photo))
+                removeLoosePhoto(photo);
+            else if (PhotoZone *zone = photo->zone())
                 zone->takeImage();
         } else if (auto *text = dynamic_cast<TextItem *>(item)) {
             m_scene.removeItem(text);
@@ -987,12 +1163,20 @@ void CanvasView::removeSelected()
 void CanvasView::clearContent()
 {
     pushUndoSnapshot();
+    for (PhotoZone *zone : m_zones) {
+        if (zone->item())
+            zone->takeImage();
+    }
+    const QList<PhotoItem *> loose = m_looseItems;
+    m_looseItems.clear();
+    for (PhotoItem *photo : loose) {
+        if (photo->scene())
+            m_scene.removeItem(photo);
+        delete photo;
+    }
     const QList<QGraphicsItem *> items = m_scene.items();
     for (QGraphicsItem *item : items) {
-        if (auto *photo = dynamic_cast<PhotoItem *>(item)) {
-            if (PhotoZone *zone = photo->zone())
-                zone->takeImage();
-        } else if (auto *text = dynamic_cast<TextItem *>(item)) {
+        if (auto *text = dynamic_cast<TextItem *>(item)) {
             m_scene.removeItem(text);
             delete text;
         }
@@ -1005,6 +1189,8 @@ void CanvasView::clearContent()
 void CanvasView::requestMoveBetweenZones(PhotoItem *item, const QPointF &scenePos)
 {
     QTimer::singleShot(0, this, [this, item, scenePos]() {
+        if (isFreeLayout())
+            return;
         PhotoZone *src = item->zone();
         if (!src || src->item() != item)
             return;
@@ -1123,27 +1309,103 @@ bool CanvasView::exportPdf(const QString &path)
     return true;
 }
 
-QByteArray CanvasView::serializeScene() const
+QJsonObject CanvasView::encodePhoto(PhotoItem *item, bool embedImages) const
+{
+    QJsonObject o;
+    if (!item)
+        return o;
+    const QString path = item->sourcePath();
+    o.insert(QStringLiteral("image"), path);
+    o.insert(QStringLiteral("x"), item->pos().x());
+    o.insert(QStringLiteral("y"), item->pos().y());
+    o.insert(QStringLiteral("scale"), item->scale());
+    int rotation = item->rotationDegrees();
+    const bool fileOk = !path.isEmpty() && QFileInfo::exists(path);
+    const bool needEmbed = embedImages || !fileOk;
+    if (needEmbed) {
+        QByteArray raw;
+        QString fmt = embedFormatForPath(path);
+        if (embedImages && fileOk) {
+            QFile file(path);
+            if (file.open(QIODevice::ReadOnly)) {
+                raw = file.readAll();
+                QImage probe;
+                if (raw.isEmpty() || !probe.loadFromData(raw))
+                    raw.clear();
+            }
+        }
+        if (raw.isEmpty()) {
+            raw = encodeEmbeddedImage(item->image());
+            fmt = item->image().hasAlphaChannel() ? QStringLiteral("PNG")
+                                                  : QStringLiteral("JPEG");
+            rotation = 0;
+        }
+        o.insert(QStringLiteral("imageFormat"), fmt);
+        o.insert(QStringLiteral("imageData"), QString::fromLatin1(raw.toBase64()));
+    }
+    o.insert(QStringLiteral("rotation"), rotation);
+    return o;
+}
+
+PhotoItem *CanvasView::decodePhoto(const QJsonObject &o, PhotoZone *board, int *missingOut)
+{
+    if (o.isEmpty() || (!o.contains(QStringLiteral("image")) && !o.contains(QStringLiteral("imageData"))))
+        return nullptr;
+    QString imagePath;
+    int rotation = 0;
+    const QImage image = imageFromZoneObject(o, &imagePath, &rotation);
+    if (image.isNull()) {
+        if (missingOut && (!imagePath.isEmpty() || o.contains(QStringLiteral("imageData"))))
+            ++(*missingOut);
+        return nullptr;
+    }
+    PhotoItem *item = nullptr;
+    if (isFreeLayout()) {
+        item = addFreeImage(image, imagePath, QPointF(o.value(QStringLiteral("x")).toDouble(),
+                                                      o.value(QStringLiteral("y")).toDouble()));
+        if (item) {
+            item->applyStoredRotation(rotation);
+            item->setScale(o.value(QStringLiteral("scale")).toDouble(1.0));
+            item->setPos(o.value(QStringLiteral("x")).toDouble(), o.value(QStringLiteral("y")).toDouble());
+        }
+    } else if (board) {
+        board->setImage(image, imagePath);
+        item = board->item();
+        if (item) {
+            item->applyStoredRotation(rotation);
+            item->setScale(o.value(QStringLiteral("scale")).toDouble(1.0));
+            item->setPos(o.value(QStringLiteral("x")).toDouble(), o.value(QStringLiteral("y")).toDouble());
+        }
+    }
+    return item;
+}
+
+QByteArray CanvasView::serializeScene(bool embedImages) const
 {
     QJsonObject root;
-    root.insert(QStringLiteral("version"), 1);
+    const int version = isFreeLayout() ? 3 : (embedImages ? 2 : 1);
+    root.insert(QStringLiteral("version"), version);
     root.insert(QStringLiteral("layout"), m_layoutIndex);
     root.insert(QStringLiteral("textPixelSize"), m_textPixelSize);
     root.insert(QStringLiteral("textColor"), m_textColor.name(QColor::HexRgb));
 
     QJsonArray zoneArray;
     for (PhotoZone *zone : m_zones) {
-        QJsonObject o;
-        if (PhotoItem *item = zone->item()) {
-            o.insert(QStringLiteral("image"), item->sourcePath());
-            o.insert(QStringLiteral("x"), item->pos().x());
-            o.insert(QStringLiteral("y"), item->pos().y());
-            o.insert(QStringLiteral("scale"), item->scale());
-            o.insert(QStringLiteral("rotation"), item->rotationDegrees());
-        }
-        zoneArray.append(o);
+        if (isFreeLayout())
+            zoneArray.append(QJsonObject());
+        else if (PhotoItem *item = zone->item())
+            zoneArray.append(encodePhoto(item, embedImages));
+        else
+            zoneArray.append(QJsonObject());
     }
     root.insert(QStringLiteral("zones"), zoneArray);
+
+    if (isFreeLayout()) {
+        QJsonArray photoArray;
+        for (PhotoItem *item : m_looseItems)
+            photoArray.append(encodePhoto(item, embedImages));
+        root.insert(QStringLiteral("photos"), photoArray);
+    }
 
     QJsonArray textArray;
     const QList<QGraphicsItem *> items = m_scene.items();
@@ -1173,34 +1435,19 @@ bool CanvasView::deserializeScene(const QByteArray &data, int *missingOut)
     // 恢复期间暂停撤销快照
     m_undoSuspended = true;
     applyLayout(root.value(QStringLiteral("layout")).toInt(0));
-    m_undoSuspended = false;
     m_textPixelSize = root.value(QStringLiteral("textPixelSize")).toInt(28);
     m_textColor = QColor(root.value(QStringLiteral("textColor")).toString(QStringLiteral("#1f2937")));
 
     int missing = 0;
-    const QJsonArray zoneArray = root.value(QStringLiteral("zones")).toArray();
-    for (int i = 0; i < zoneArray.size() && i < m_zones.size(); ++i) {
-        const QJsonObject o = zoneArray.at(i).toObject();
-        const QString imagePath = o.value(QStringLiteral("image")).toString();
-        if (imagePath.isEmpty())
-            continue;
-        if (!QFileInfo::exists(imagePath)) {
-            ++missing;
-            continue;
-        }
-        QImageReader reader(imagePath);
-        reader.setAutoTransform(true);
-        const QImage image = reader.read();
-        if (image.isNull()) {
-            ++missing;
-            continue;
-        }
-        m_zones.at(i)->setImage(image, imagePath);
-        if (PhotoItem *item = m_zones.at(i)->item()) {
-            item->applyStoredRotation(o.value(QStringLiteral("rotation")).toInt(0));
-            item->setScale(o.value(QStringLiteral("scale")).toDouble(1.0));
-            item->setPos(o.value(QStringLiteral("x")).toDouble(), o.value(QStringLiteral("y")).toDouble());
-        }
+    if (isFreeLayout()) {
+        const QJsonArray photoArray = root.value(QStringLiteral("photos")).toArray();
+        PhotoZone *board = m_zones.isEmpty() ? nullptr : m_zones.first();
+        for (const QJsonValue &value : photoArray)
+            decodePhoto(value.toObject(), board, &missing);
+    } else {
+        const QJsonArray zoneArray = root.value(QStringLiteral("zones")).toArray();
+        for (int i = 0; i < zoneArray.size() && i < m_zones.size(); ++i)
+            decodePhoto(zoneArray.at(i).toObject(), m_zones.at(i), &missing);
     }
 
     const QJsonArray textArray = root.value(QStringLiteral("texts")).toArray();
@@ -1216,6 +1463,7 @@ bool CanvasView::deserializeScene(const QByteArray &data, int *missingOut)
 
     if (missingOut)
         *missingOut = missing;
+    m_undoSuspended = false;
     return true;
 }
 
@@ -1224,7 +1472,7 @@ bool CanvasView::saveProject(const QString &path)
     QFile file(path);
     if (!file.open(QIODevice::WriteOnly))
         return false;
-    file.write(serializeScene());
+    file.write(serializeScene(true));
     return true;
 }
 
@@ -1284,6 +1532,9 @@ bool CanvasView::viewportEvent(QEvent *event)
     case QEvent::Drop:
         dropEvent(static_cast<QDropEvent *>(event));
         return true;
+    case QEvent::ContextMenu:
+        contextMenuEvent(static_cast<QContextMenuEvent *>(event));
+        return true;
     default:
         return QGraphicsView::viewportEvent(event);
     }
@@ -1320,25 +1571,75 @@ void CanvasView::dropEvent(QDropEvent *event)
     event->setDropAction(Qt::CopyAction);
     event->acceptProposedAction();
 
-    int index = 0;
     int count = 0;
     const QPointF scenePos = mapToScene(QT_MOUSE_POS(event));
-    if (PhotoZone *target = zoneAt(scenePos)) {
-        if (importInto(target, files.at(index)))
-            ++count;
-        ++index;
-    }
-    for (; index < files.size(); ++index) {
-        PhotoZone *zone = firstEmptyZone();
-        if (!zone) {
-            emit statusMessage(tr("分区已满，剩余图片已忽略"));
-            break;
+    if (isFreeLayout()) {
+        int offset = 0;
+        for (const QString &file : files) {
+            QImageReader reader(file);
+            reader.setAutoTransform(true);
+            const QImage image = reader.read();
+            if (image.isNull()) {
+                emit statusMessage(tr("无法读取图片：%1").arg(QFileInfo(file).fileName()));
+                continue;
+            }
+            if (addFreeImage(image, file, scenePos + QPointF(offset * 36.0, offset * 36.0)))
+                ++count;
+            ++offset;
         }
-        if (importInto(zone, files.at(index)))
-            ++count;
+    } else {
+        int index = 0;
+        if (PhotoZone *target = zoneAt(scenePos)) {
+            if (importInto(target, files.at(index)))
+                ++count;
+            ++index;
+        }
+        for (; index < files.size(); ++index) {
+            PhotoZone *zone = firstEmptyZone();
+            if (!zone) {
+                emit statusMessage(tr("分区已满，剩余图片已忽略"));
+                break;
+            }
+            if (importInto(zone, files.at(index)))
+                ++count;
+        }
     }
     if (count > 0)
         emit statusMessage(tr("已导入 %1 张图片").arg(count));
+}
+
+void CanvasView::contextMenuEvent(QContextMenuEvent *event)
+{
+    const QPointF scenePos = mapToScene(event->pos());
+    QGraphicsItem *hit = m_scene.itemAt(scenePos, transform());
+    if (auto *photo = dynamic_cast<PhotoItem *>(hit)) {
+        if (!photo->isSelected()) {
+            m_scene.clearSelection();
+            photo->setSelected(true);
+        }
+    } else if (auto *text = dynamic_cast<TextItem *>(hit)) {
+        if (!text->isSelected()) {
+            m_scene.clearSelection();
+            text->setSelected(true);
+        }
+    } else if (PhotoZone *zone = zoneAt(scenePos)) {
+        if (zone->item() && !zone->item()->isSelected()) {
+            m_scene.clearSelection();
+            zone->item()->setSelected(true);
+        }
+    }
+
+    if (m_scene.selectedItems().isEmpty()) {
+        event->ignore();
+        return;
+    }
+
+    QMenu menu(this);
+    QAction *actDelete = menu.addAction(tr("删除"));
+    const QAction *chosen = menu.exec(event->globalPos());
+    if (chosen == actDelete)
+        removeSelected();
+    event->accept();
 }
 
 void CanvasView::mouseDoubleClickEvent(QMouseEvent *event)
@@ -1355,9 +1656,18 @@ void CanvasView::mouseDoubleClickEvent(QMouseEvent *event)
     }
     if (dynamic_cast<PhotoZone *>(item)) {
         const QString file = QFileDialog::getOpenFileName(this, tr("选择图片"), QString(),
-            tr("图片 (*.png *.jpg *.jpeg *.bmp *.gif *.tif *.tiff)"));
-        if (!file.isEmpty())
+            tr("图片 (*.png *.jpg *.jpeg *.bmp *.gif *.tif *.tiff *.heic *.heif *.webp)"));
+        if (file.isEmpty())
+            return;
+        if (isFreeLayout()) {
+            QImageReader reader(file);
+            reader.setAutoTransform(true);
+            const QImage image = reader.read();
+            if (!image.isNull())
+                addFreeImage(image, file, scenePos);
+        } else {
             importInto(static_cast<PhotoZone *>(item), file);
+        }
         return;
     }
     QGraphicsView::mouseDoubleClickEvent(event);

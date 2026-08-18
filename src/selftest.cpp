@@ -11,8 +11,12 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QElapsedTimer>
+#include <QFile>
 #include <QGuiApplication>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
 #include <QFont>
 #include <QImage>
 #include <QMimeData>
@@ -55,21 +59,37 @@ int runSelftest(const QString &outPath)
     for (int layout = 0; layout < canvas->layoutCount(); ++layout) {
         canvas->applyLayout(layout);
         const QList<PhotoZone *> zones = canvas->zones();
-        if (zones.size() < 2 || zones.size() > 4) {
-            std::fprintf(stderr, "SELFTEST FAIL: layout %d has %d zones\n",
-                         layout, int(zones.size()));
-            return 5;
-        }
-        // 按分区标签匹配装入对应图片，保证导出图自洽
-        for (PhotoZone *zone : zones) {
-            int best = 0;
-            for (int i = 0; i < 5; ++i) {
-                if (zone->label() == QString::fromUtf8(names[i])) {
-                    best = i;
-                    break;
-                }
+        if (canvas->isFreeLayout()) {
+            if (zones.size() != 1) {
+                std::fprintf(stderr, "SELFTEST FAIL: free layout %d has %d zones\n",
+                             layout, int(zones.size()));
+                return 5;
             }
-            zone->setImage(source[best]);
+            canvas->addFreeImage(source[0], QString(), QPointF(400.0, 400.0));
+            canvas->addFreeImage(source[1], QString(), QPointF(1000.0, 400.0));
+            canvas->addFreeImage(source[2], QString(), QPointF(700.0, 750.0));
+            if (canvas->freeImageCount() != 3) {
+                std::fprintf(stderr, "SELFTEST FAIL: free layout expected 3 images, got %d\n",
+                             canvas->freeImageCount());
+                return 46;
+            }
+        } else {
+            if (zones.size() < 2 || zones.size() > 4) {
+                std::fprintf(stderr, "SELFTEST FAIL: layout %d has %d zones\n",
+                             layout, int(zones.size()));
+                return 5;
+            }
+            // 按分区标签匹配装入对应图片，保证导出图自洽
+            for (PhotoZone *zone : zones) {
+                int best = 0;
+                for (int i = 0; i < 5; ++i) {
+                    if (zone->label() == QString::fromUtf8(names[i])) {
+                        best = i;
+                        break;
+                    }
+                }
+                zone->setImage(source[best]);
+            }
         }
 
         canvas->addText(QString::fromUtf8("示例患者  13800000000  7Y 8M"));
@@ -87,15 +107,24 @@ int runSelftest(const QString &outPath)
                          check.width(), check.height(), layout);
             return 2;
         }
-        // 每个分区取中心偏下 35% 高度处（避开图片中央白字），必须非纯白
-        for (const PhotoZone *zone : zones) {
-            const QRectF r = zone->rect();
-            const QPoint probe(int(r.center().x() * 2.0),
-                               int((r.center().y() + r.height() * 0.35) * 2.0));
+        if (canvas->isFreeLayout()) {
+            const QPoint probe(800, 800); // 第一张自由图中心附近
             if (check.pixelColor(probe) == QColor(Qt::white)) {
-                std::fprintf(stderr, "SELFTEST FAIL: blank zone in layout %d at %d,%d\n",
-                             layout, probe.x(), probe.y());
+                std::fprintf(stderr, "SELFTEST FAIL: blank free collage at %d,%d\n",
+                             probe.x(), probe.y());
                 return 3;
+            }
+        } else {
+            // 每个分区取中心偏下 35% 高度处（避开图片中央白字），必须非纯白
+            for (const PhotoZone *zone : zones) {
+                const QRectF r = zone->rect();
+                const QPoint probe(int(r.center().x() * 2.0),
+                                   int((r.center().y() + r.height() * 0.35) * 2.0));
+                if (check.pixelColor(probe) == QColor(Qt::white)) {
+                    std::fprintf(stderr, "SELFTEST FAIL: blank zone in layout %d at %d,%d\n",
+                                 layout, probe.x(), probe.y());
+                    return 3;
+                }
             }
         }
         // 画布外缘边距必须纯白（各布局分区都不触及边距）
@@ -336,7 +365,99 @@ int runSelftest(const QString &outPath)
         return 37;
     }
 
-    std::printf("SELFTEST OK %s (%d layouts, project+pdf+resize+undo+drop+rotate+copy)\n",
+    // 内嵌工程：删掉源图后仍能打开
+    canvas->applyLayout(0);
+    for (int i = 0; i < 4; ++i)
+        canvas->zones().at(i)->setImage(source[i],
+            dir + QStringLiteral("/") + base + QStringLiteral("_src%1.png").arg(i + 1));
+    const QString packedPath = dir + QStringLiteral("/") + base + QStringLiteral("_packed.dcp");
+    if (!canvas->saveProject(packedPath)) {
+        std::fprintf(stderr, "SELFTEST FAIL: save packed project\n");
+        return 38;
+    }
+    {
+        const QByteArray packed = [&]() {
+            QFile f(packedPath);
+            if (!f.open(QIODevice::ReadOnly))
+                return QByteArray();
+            return f.readAll();
+        }();
+        if (!packed.contains("imageData")) {
+            std::fprintf(stderr, "SELFTEST FAIL: packed project missing imageData\n");
+            return 39;
+        }
+    }
+    for (int i = 0; i < 4; ++i)
+        QFile::remove(dir + QStringLiteral("/") + base + QStringLiteral("_src%1.png").arg(i + 1));
+    canvas->clearContent();
+    if (!canvas->loadProject(packedPath)) {
+        std::fprintf(stderr, "SELFTEST FAIL: load packed project after sources deleted\n");
+        return 40;
+    }
+    if (!canvas->zones().at(0)->hasImage() || !canvas->zones().at(3)->hasImage()) {
+        std::fprintf(stderr, "SELFTEST FAIL: packed project lost images\n");
+        return 41;
+    }
+    const QString packedOut = dir + QStringLiteral("/") + base + QStringLiteral("_packed.png");
+    if (!canvas->exportImage(packedOut, 2.0)) {
+        std::fprintf(stderr, "SELFTEST FAIL: packed export\n");
+        return 42;
+    }
+    const QImage packedCheck(packedOut);
+    if (packedCheck.isNull() || packedCheck.pixelColor(818, 1000) == QColor(Qt::white)) {
+        std::fprintf(stderr, "SELFTEST FAIL: packed export blank\n");
+        return 43;
+    }
+
+    // 旧版只记路径的 .dcp 仍能打开（源图还在）
+    source[0].save(dir + QStringLiteral("/") + base + QStringLiteral("_src1.png"));
+    QJsonObject v1root;
+    v1root.insert(QStringLiteral("version"), 1);
+    v1root.insert(QStringLiteral("layout"), 0);
+    QJsonArray v1zones;
+    QJsonObject z0;
+    z0.insert(QStringLiteral("image"), dir + QStringLiteral("/") + base + QStringLiteral("_src1.png"));
+    z0.insert(QStringLiteral("x"), 28.0);
+    z0.insert(QStringLiteral("y"), 28.0);
+    z0.insert(QStringLiteral("scale"), 1.0);
+    v1zones.append(z0);
+    v1root.insert(QStringLiteral("zones"), v1zones);
+    const QString v1Path = dir + QStringLiteral("/") + base + QStringLiteral("_v1.dcp");
+    {
+        QFile f(v1Path);
+        if (!f.open(QIODevice::WriteOnly)
+            || f.write(QJsonDocument(v1root).toJson(QJsonDocument::Compact)) <= 0) {
+            std::fprintf(stderr, "SELFTEST FAIL: write v1 project\n");
+            return 44;
+        }
+    }
+    canvas->clearContent();
+    if (!canvas->loadProject(v1Path) || !canvas->zones().at(0)->hasImage()) {
+        std::fprintf(stderr, "SELFTEST FAIL: old path-only dcp did not load\n");
+        return 45;
+    }
+
+    // 自由拼图工程往返
+    canvas->applyLayout(canvas->layoutCount() - 1);
+    if (!canvas->isFreeLayout()) {
+        std::fprintf(stderr, "SELFTEST FAIL: last layout is not freeform\n");
+        return 47;
+    }
+    canvas->addFreeImage(source[0], QString(), QPointF(500.0, 400.0));
+    canvas->addFreeImage(source[1], QString(), QPointF(1100.0, 700.0));
+    const QString freeProj = dir + QStringLiteral("/") + base + QStringLiteral("_free.dcp");
+    if (!canvas->saveProject(freeProj)) {
+        std::fprintf(stderr, "SELFTEST FAIL: save free project\n");
+        return 48;
+    }
+    canvas->clearContent();
+    if (!canvas->loadProject(freeProj) || !canvas->isFreeLayout() || canvas->freeImageCount() != 2) {
+        std::fprintf(stderr, "SELFTEST FAIL: free project roundtrip count=%d\n",
+                     canvas->freeImageCount());
+        return 49;
+    }
+
+    std::printf("SELFTEST OK %s (%d layouts, project+pdf+resize+undo+drop+rotate+copy+embed+free)\n",
                 qPrintable(outPath), canvas->layoutCount());
     return 0;
 }

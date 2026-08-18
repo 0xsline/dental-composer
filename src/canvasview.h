@@ -9,6 +9,7 @@
 #include <QGraphicsTextItem>
 #include <QGraphicsView>
 #include <QImage>
+#include <QJsonObject>
 #include <QList>
 #include <QPainterPath>
 #include <QPointF>
@@ -33,6 +34,7 @@ struct LayoutSpec
 {
     QString name;
     QList<ZoneSpec> zones;
+    bool freeform = false;
 };
 
 // 分区内的一张图片：整图等比例缩放，可小于分区；拖边改图片大小，滚轮等比缩放。
@@ -49,6 +51,8 @@ public:
     PhotoItem(const QImage &original, const QImage &display, PhotoZone *zone);
 
     void fitToZone();
+    void placeCentered(const QPointF &sceneCenter, qreal boardFraction);
+    QRectF boardRect() const;
     void zoomBy(qreal factor, const QPointF &scenePos);           // 以场景点为原点等比例缩放
     void applyResize(ResizeHandle handle, const QPointF &mouseScene); // 以图片对边/对角为锚点等比缩放
     void rotateBy90(int quarterTurns);                            // +1 顺时针，-1 逆时针；保持中心
@@ -154,9 +158,12 @@ public:
     int layoutCount() const;
     QString layoutName(int index) const;
     int currentLayout() const { return m_layoutIndex; }
+    bool isFreeLayout() const;
     void applyLayout(int index); // 切换布局模板（清空现有内容）
 
-    void importImages(const QStringList &files);          // 顺序装入空分区
+    void importImages(const QStringList &files);          // 模板填空格；自由布局逐张放下
+    PhotoItem *addFreeImage(const QImage &image, const QString &path, const QPointF &sceneCenter);
+    int freeImageCount() const { return m_looseItems.size(); }
     void addText(const QString &text);
     void setTextStyle(int pixelSize, const QColor &color);
     void applyStyleToSelection(int pixelSize, const QColor &color); // 字体/颜色作用于选中文字
@@ -176,6 +183,7 @@ public:
     void undo();                                           // 撤销一步（Ctrl+Z）
     PhotoZone *zoneAt(const QPointF &scenePos) const;
     void requestMoveBetweenZones(PhotoItem *item, const QPointF &scenePos);
+    void raisePhoto(PhotoItem *item);
     static bool canAcceptImageDrop(const QMimeData *mime);
     static QStringList imagePathsFromMime(const QMimeData *mime);
 
@@ -188,6 +196,7 @@ protected:
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dragMoveEvent(QDragMoveEvent *event) override;
     void dropEvent(QDropEvent *event) override;
+    void contextMenuEvent(QContextMenuEvent *event) override;
     void mouseDoubleClickEvent(QMouseEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
@@ -198,16 +207,21 @@ private:
     void buildScene();
     PhotoZone *firstEmptyZone() const;
     bool importInto(PhotoZone *zone, const QString &path);
+    void removeLoosePhoto(PhotoItem *photo);
     static bool isImageFile(const QString &path);
     TextItem *createTextItem(const QString &text);
     void fitScene();
-    QByteArray serializeScene() const;
+    QByteArray serializeScene(bool embedImages = false) const;
+    QJsonObject encodePhoto(PhotoItem *item, bool embedImages) const;
+    PhotoItem *decodePhoto(const QJsonObject &o, PhotoZone *board, int *missingOut);
 
     QGraphicsScene m_scene;
     QList<PhotoZone *> m_zones;
+    QList<PhotoItem *> m_looseItems;
     QList<TextItem *> m_templateItems;
     QList<QByteArray> m_undoStack;
     int m_layoutIndex = 0;
+    int m_topZ = 1;
     int m_textPixelSize = 28;
     QColor m_textColor = QColor(0x1f, 0x29, 0x37);
     bool m_undoSuspended = false;
