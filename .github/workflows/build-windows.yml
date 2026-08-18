@@ -59,6 +59,10 @@ jobs:
           Write-Host "ucrtbase.dll version: $ucrtVer"
           if ($ucrtVer -notlike "10.0.19041*") { throw "ucrtbase.dll not 19041: $ucrtVer" }
           if (-not (Test-Path build-win\Release\vcruntime140.dll)) { throw "vcruntime140.dll missing" }
+          # 离屏自测需要 qoffscreen（windeployqt 默认只拷 qwindows）
+          $offscreen = Join-Path $env:QT_ROOT_DIR "plugins\platforms\qoffscreen.dll"
+          if (-not (Test-Path $offscreen)) { throw "qoffscreen.dll not in Qt: $offscreen" }
+          Copy-Item -Force $offscreen build-win\Release\platforms\
 
       - name: Prepare signing
         shell: pwsh
@@ -85,9 +89,13 @@ jobs:
         shell: pwsh
         run: |
           $env:QT_QPA_PLATFORM = "offscreen"
-          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\dc" | Out-Null
-          & build-win\Release\dental-composer.exe --selftest "$env:RUNNER_TEMP\dc\selftest.png"
-          if ($LASTEXITCODE -ne 0) { throw "selftest failed: $LASTEXITCODE" }
+          $outDir = Join-Path $env:RUNNER_TEMP "dc"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+          $exe = "build-win\Release\dental-composer.exe"
+          $png = Join-Path $outDir "selftest.png"
+          $p = Start-Process -FilePath $exe -ArgumentList @("--selftest", $png) -Wait -PassThru -NoNewWindow
+          Write-Host "selftest exit=$($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { throw "selftest failed: $($p.ExitCode)" }
 
       - name: Build NSIS installer
         working-directory: scripts
