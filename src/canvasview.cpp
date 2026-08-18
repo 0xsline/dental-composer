@@ -290,26 +290,31 @@ void PhotoItem::hoverLeaveEvent(QGraphicsSceneHoverEvent *event)
 
 void PhotoItem::hoverMoveEvent(QGraphicsSceneHoverEvent *event)
 {
-    switch (handleAt(event->scenePos())) {
-    case ResizeHandle::CornerTopLeft:
-    case ResizeHandle::CornerBottomRight:
-        setCursor(Qt::SizeFDiagCursor);
-        break;
-    case ResizeHandle::CornerTopRight:
-    case ResizeHandle::CornerBottomLeft:
-        setCursor(Qt::SizeBDiagCursor);
-        break;
-    case ResizeHandle::EdgeLeft:
-    case ResizeHandle::EdgeRight:
-        setCursor(Qt::SizeHorCursor);
-        break;
-    case ResizeHandle::EdgeTop:
-    case ResizeHandle::EdgeBottom:
-        setCursor(Qt::SizeVerCursor);
-        break;
-    default:
+    // 仅选中状态显示缩放光标，避免与"抓边缘拖动图片"冲突
+    if (isSelected()) {
+        switch (handleAt(event->scenePos())) {
+        case ResizeHandle::CornerTopLeft:
+        case ResizeHandle::CornerBottomRight:
+            setCursor(Qt::SizeFDiagCursor);
+            break;
+        case ResizeHandle::CornerTopRight:
+        case ResizeHandle::CornerBottomLeft:
+            setCursor(Qt::SizeBDiagCursor);
+            break;
+        case ResizeHandle::EdgeLeft:
+        case ResizeHandle::EdgeRight:
+            setCursor(Qt::SizeHorCursor);
+            break;
+        case ResizeHandle::EdgeTop:
+        case ResizeHandle::EdgeBottom:
+            setCursor(Qt::SizeVerCursor);
+            break;
+        default:
+            setCursor(Qt::OpenHandCursor);
+            break;
+        }
+    } else {
         setCursor(Qt::OpenHandCursor);
-        break;
     }
     QGraphicsPixmapItem::hoverMoveEvent(event);
 }
@@ -317,16 +322,18 @@ void PhotoItem::hoverMoveEvent(QGraphicsSceneHoverEvent *event)
 void PhotoItem::mousePressEvent(QGraphicsSceneMouseEvent *event)
 {
     if (event->button() == Qt::LeftButton) {
-        // 按住拖边句柄 → 缩放；否则平移（均先记录撤销快照）
-        const ResizeHandle handle = handleAt(event->scenePos());
-        if (handle != ResizeHandle::None) {
-            if (CanvasView *view = viewFor(this))
-                view->pushUndoSnapshot();
-            m_resizing = true;
-            m_resizeHandle = handle;
-            m_resizeAnchor = resizeAnchor(handle);
-            event->accept();
-            return;
+        // 已选中且按住拖边句柄 → 缩放；其余一律平移/选中（避免抓图片边缘拖动时误触缩放）
+        if (isSelected()) {
+            const ResizeHandle handle = handleAt(event->scenePos());
+            if (handle != ResizeHandle::None) {
+                if (CanvasView *view = viewFor(this))
+                    view->pushUndoSnapshot();
+                m_resizing = true;
+                m_resizeHandle = handle;
+                m_resizeAnchor = resizeAnchor(handle);
+                event->accept();
+                return;
+            }
         }
         if (CanvasView *view = viewFor(this))
             view->pushUndoSnapshot();
@@ -339,7 +346,6 @@ void PhotoItem::mousePressEvent(QGraphicsSceneMouseEvent *event)
     }
     QGraphicsPixmapItem::mousePressEvent(event);
 }
-
 
 void PhotoItem::mouseMoveEvent(QGraphicsSceneMouseEvent *event)
 {
