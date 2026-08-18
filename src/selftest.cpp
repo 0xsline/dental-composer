@@ -186,6 +186,37 @@ int runSelftest(const QString &outPath)
     }
     ritem->setSelected(false);
 
-    std::printf("SELFTEST OK %s (%d layouts, project+pdf+resize)\n", qPrintable(outPath), canvas->layoutCount());
+    // 撤销：导入 → 撤销 → 图片移除
+    canvas->applyLayout(0);
+    const QString src1 = dir + QStringLiteral("/") + base + QStringLiteral("_src1.png");
+    canvas->importImages({ src1 });
+    if (!canvas->zones().at(0)->hasImage()) {
+        std::fprintf(stderr, "SELFTEST FAIL: import did not load\n");
+        return 19;
+    }
+    canvas->undo();
+    if (canvas->zones().at(0)->hasImage()) {
+        std::fprintf(stderr, "SELFTEST FAIL: undo did not remove imported image\n");
+        return 20;
+    }
+
+    // 滚轮缩放路径：快照 → zoomBy 放大 → 撤销恢复原比例
+    canvas->zones().at(0)->setImage(source[0], src1);
+    PhotoItem *zi = canvas->zones().at(0)->item();
+    const qreal zoomBefore = zi->scale();
+    canvas->pushUndoSnapshot();
+    zi->zoomBy(1.4, canvas->zones().at(0)->rect().center());
+    if (zi->scale() <= zoomBefore) {
+        std::fprintf(stderr, "SELFTEST FAIL: zoomBy did not zoom in\n");
+        return 21;
+    }
+    canvas->undo();
+    PhotoItem *ziRestored = canvas->zones().at(0)->item();
+    if (!ziRestored || qAbs(ziRestored->scale() - zoomBefore) > 0.001) {
+        std::fprintf(stderr, "SELFTEST FAIL: undo did not restore zoom\n");
+        return 22;
+    }
+
+    std::printf("SELFTEST OK %s (%d layouts, project+pdf+resize+undo)\n", qPrintable(outPath), canvas->layoutCount());
     return 0;
 }

@@ -68,6 +68,10 @@ MainWindow::MainWindow(QWidget *parent)
     actImport->setToolTip(tr("选择图片文件，依次装入空分区"));
     toolBar->addAction(actPatient);
     actPatient->setToolTip(tr("填写患者信息，自动生成临床文字"));
+    QAction *actUndo = toolBar->addAction(style()->standardIcon(QStyle::SP_ArrowBack), tr("撤销"));
+    actUndo->setShortcut(QKeySequence::Undo);
+    actUndo->setToolTip(tr("撤销上一步操作（Ctrl+Z）"));
+    editMenu->addAction(actUndo);
     QAction *actText = toolBar->addAction(style()->standardIcon(QStyle::SP_FileDialogContentsView), tr("添加文字"));
     actText->setToolTip(tr("在画布上添加一条文字，双击编辑"));
     QAction *actRemove = toolBar->addAction(style()->standardIcon(QStyle::SP_TrashIcon), tr("移除选中"));
@@ -100,6 +104,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(actImport, &QAction::triggered, this, &MainWindow::onImport);
     connect(actText, &QAction::triggered, this, &MainWindow::onAddText);
     connect(actPatient, &QAction::triggered, this, &MainWindow::onPatientInfo);
+    connect(actUndo, &QAction::triggered, m_canvas, &CanvasView::undo);
     connect(actRemove, &QAction::triggered, m_canvas, &CanvasView::removeSelected);
     connect(actClear, &QAction::triggered, this, &MainWindow::onClear);
     connect(actExport, &QAction::triggered, this, &MainWindow::onExport);
@@ -110,6 +115,11 @@ MainWindow::MainWindow(QWidget *parent)
     connect(actPrintPreview, &QAction::triggered, this, &MainWindow::onPrintPreview);
     connect(m_layoutBox, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onLayoutChanged);
+    connect(m_canvas, &CanvasView::layoutChanged, this, [this](int index) {
+        m_layoutBox->blockSignals(true);
+        m_layoutBox->setCurrentIndex(index);
+        m_layoutBox->blockSignals(false);
+    });
     connect(m_fontSize, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int value) {
         m_canvas->setTextStyle(value, m_textColor);
         m_canvas->applyStyleToSelection(value, m_textColor);

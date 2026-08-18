@@ -2,6 +2,7 @@
 #pragma once
 
 #include <QColor>
+#include <QElapsedTimer>
 #include <QGraphicsPixmapItem>
 #include <QGraphicsRectItem>
 #include <QGraphicsScene>
@@ -32,7 +33,7 @@ struct LayoutSpec
     QList<ZoneSpec> zones;
 };
 
-// 分区内的一张图片：平移、滚轮缩放、双击适应、可拖到其他分区。
+// 分区内的一张图片：平移、滚轮缩放、拖边缩放、双击适应、可拖到其他分区。
 class PhotoItem : public QGraphicsPixmapItem
 {
 public:
@@ -46,6 +47,7 @@ public:
     PhotoItem(const QImage &original, const QImage &display, PhotoZone *zone);
 
     void fitToZone();
+    void zoomBy(qreal factor, const QPointF &scenePos);           // 以场景点为原点缩放
     void applyResize(ResizeHandle handle, const QPointF &mouseScene); // 以对边/对角为锚点缩放
     QPainterPath localClipPath() const;
     PhotoZone *zone() const { return m_zone; }
@@ -56,6 +58,8 @@ public:
 
 protected:
     void paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget = nullptr) override;
+    void hoverEnterEvent(QGraphicsSceneHoverEvent *event) override;
+    void hoverLeaveEvent(QGraphicsSceneHoverEvent *event) override;
     void hoverMoveEvent(QGraphicsSceneHoverEvent *event) override;
     void mousePressEvent(QGraphicsSceneMouseEvent *event) override;
     void mouseMoveEvent(QGraphicsSceneMouseEvent *event) override;
@@ -77,8 +81,10 @@ private:
     QPointF m_lastScenePos;
     QPointF m_resizeAnchor;
     ResizeHandle m_resizeHandle = ResizeHandle::None;
+    QElapsedTimer m_lastWheelUndo;
     bool m_dragging = false;
     bool m_resizing = false;
+    bool m_hovered = false;
 };
 
 // 画布上的一个分区：背景、名称标签，容纳一张图片。
@@ -119,7 +125,7 @@ protected:
     void focusOutEvent(QFocusEvent *event) override;
 };
 
-// 主画布视图：多布局分区、拖入图片、文字、导出、工程文件。
+// 主画布视图：多布局分区、拖入图片、文字、导出、工程文件、撤销。
 class CanvasView : public QGraphicsView
 {
     Q_OBJECT
@@ -141,15 +147,19 @@ public:
     void removeSelected();
     void clearContent();                                   // 清空图片与文字，保留分区
     void renderContent(QPainter *painter, const QRectF &target); // 白底、无分区的共用渲染
+    bool deserializeScene(const QByteArray &data, int *missingOut = nullptr); // 恢复场景（撤销/打开工程用）
     bool exportImage(const QString &path, qreal scale);    // 按后缀导出 PNG/JPEG
     bool exportPdf(const QString &path);
     bool saveProject(const QString &path);                 // 工程文件
     bool loadProject(const QString &path);
+    void pushUndoSnapshot();                               // 记录当前状态（撤销用）
+    void undo();                                           // 撤销一步（Ctrl+Z）
     PhotoZone *zoneAt(const QPointF &scenePos) const;
     void requestMoveBetweenZones(PhotoItem *item, const QPointF &scenePos);
 
 signals:
     void statusMessage(const QString &message);
+    void layoutChanged(int index);
 
 protected:
     void dragEnterEvent(QDragEnterEvent *event) override;
@@ -168,11 +178,14 @@ private:
     static bool isImageFile(const QString &path);
     TextItem *createTextItem(const QString &text);
     void fitScene();
+    QByteArray serializeScene() const;
 
     QGraphicsScene m_scene;
     QList<PhotoZone *> m_zones;
     QList<TextItem *> m_templateItems;
+    QList<QByteArray> m_undoStack;
     int m_layoutIndex = 0;
     int m_textPixelSize = 28;
     QColor m_textColor = QColor(0x1f, 0x29, 0x37);
+    bool m_undoSuspended = false;
 };

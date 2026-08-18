@@ -128,8 +128,8 @@ void PhotoItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option,
     QGraphicsPixmapItem::paint(painter, option, widget);
     painter->restore();
 
-    // 选中时画拖边缩放句柄（分区四角 + 四边中点）
-    if (isSelected() && m_zone) {
+    // 悬停或选中时画拖边缩放句柄（分区四角 + 四边中点）
+    if ((isSelected() || m_hovered) && m_zone) {
         const QPolygonF z = mapFromParent(QRectF(m_zone->rect()));
         if (z.size() < 4)
             return;
@@ -137,9 +137,9 @@ void PhotoItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option,
         const QPointF e[4] = {
             (c[0] + c[1]) / 2, (c[1] + c[2]) / 2, (c[2] + c[3]) / 2, (c[3] + c[0]) / 2
         };
-        const qreal sz = 9.0 / scale();
+        const qreal sz = 12.0 / scale();
         painter->setRenderHint(QPainter::Antialiasing, false);
-        painter->setPen(QPen(QColor(0x2b, 0x57, 0x9a), qMax(1.0, 1.5 / scale())));
+        painter->setPen(QPen(QColor(0x2b, 0x57, 0x9a), qMax(1.0, 1.8 / scale())));
         painter->setBrush(Qt::white);
         for (int i = 0; i < 4; ++i) {
             painter->drawRect(QRectF(c[i].x() - sz / 2, c[i].y() - sz / 2, sz, sz));
@@ -147,6 +147,7 @@ void PhotoItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option,
         }
     }
 }
+
 
 PhotoItem::ResizeHandle PhotoItem::handleAt(const QPointF &scenePos) const
 {
@@ -247,32 +248,42 @@ void PhotoItem::applyResize(ResizeHandle handle, const QPointF &mouseScene)
     clampToZone();
 }
 
+void PhotoItem::hoverEnterEvent(QGraphicsSceneHoverEvent *event)
+{
+    m_hovered = true;
+    update();
+    QGraphicsPixmapItem::hoverEnterEvent(event);
+}
+
+void PhotoItem::hoverLeaveEvent(QGraphicsSceneHoverEvent *event)
+{
+    m_hovered = false;
+    update();
+    QGraphicsPixmapItem::hoverLeaveEvent(event);
+}
+
 void PhotoItem::hoverMoveEvent(QGraphicsSceneHoverEvent *event)
 {
-    if (isSelected()) {
-        switch (handleAt(event->scenePos())) {
-        case ResizeHandle::CornerTopLeft:
-        case ResizeHandle::CornerBottomRight:
-            setCursor(Qt::SizeFDiagCursor);
-            break;
-        case ResizeHandle::CornerTopRight:
-        case ResizeHandle::CornerBottomLeft:
-            setCursor(Qt::SizeBDiagCursor);
-            break;
-        case ResizeHandle::EdgeLeft:
-        case ResizeHandle::EdgeRight:
-            setCursor(Qt::SizeHorCursor);
-            break;
-        case ResizeHandle::EdgeTop:
-        case ResizeHandle::EdgeBottom:
-            setCursor(Qt::SizeVerCursor);
-            break;
-        default:
-            setCursor(Qt::OpenHandCursor);
-            break;
-        }
-    } else {
+    switch (handleAt(event->scenePos())) {
+    case ResizeHandle::CornerTopLeft:
+    case ResizeHandle::CornerBottomRight:
+        setCursor(Qt::SizeFDiagCursor);
+        break;
+    case ResizeHandle::CornerTopRight:
+    case ResizeHandle::CornerBottomLeft:
+        setCursor(Qt::SizeBDiagCursor);
+        break;
+    case ResizeHandle::EdgeLeft:
+    case ResizeHandle::EdgeRight:
+        setCursor(Qt::SizeHorCursor);
+        break;
+    case ResizeHandle::EdgeTop:
+    case ResizeHandle::EdgeBottom:
+        setCursor(Qt::SizeVerCursor);
+        break;
+    default:
         setCursor(Qt::OpenHandCursor);
+        break;
     }
     QGraphicsPixmapItem::hoverMoveEvent(event);
 }
@@ -280,17 +291,19 @@ void PhotoItem::hoverMoveEvent(QGraphicsSceneHoverEvent *event)
 void PhotoItem::mousePressEvent(QGraphicsSceneMouseEvent *event)
 {
     if (event->button() == Qt::LeftButton) {
-        // 选中状态下按住拖边句柄 → 缩放；否则平移
-        if (isSelected()) {
-            const ResizeHandle handle = handleAt(event->scenePos());
-            if (handle != ResizeHandle::None) {
-                m_resizing = true;
-                m_resizeHandle = handle;
-                m_resizeAnchor = resizeAnchor(handle);
-                event->accept();
-                return;
-            }
+        // 按住拖边句柄 → 缩放；否则平移（均先记录撤销快照）
+        const ResizeHandle handle = handleAt(event->scenePos());
+        if (handle != ResizeHandle::None) {
+            if (CanvasView *view = viewFor(this))
+                view->pushUndoSnapshot();
+            m_resizing = true;
+            m_resizeHandle = handle;
+            m_resizeAnchor = resizeAnchor(handle);
+            event->accept();
+            return;
         }
+        if (CanvasView *view = viewFor(this))
+            view->pushUndoSnapshot();
         m_dragging = true;
         m_lastScenePos = event->scenePos();
         setCursor(Qt::ClosedHandCursor);
@@ -300,6 +313,7 @@ void PhotoItem::mousePressEvent(QGraphicsSceneMouseEvent *event)
     }
     QGraphicsPixmapItem::mousePressEvent(event);
 }
+
 
 void PhotoItem::mouseMoveEvent(QGraphicsSceneMouseEvent *event)
 {
@@ -339,6 +353,14 @@ void PhotoItem::mouseReleaseEvent(QGraphicsSceneMouseEvent *event)
     QGraphicsPixmapItem::mouseReleaseEvent(event);
 }
 
+void PhotoItem::zoomBy(qreal factor, const QPointF &scenePos)
+{
+    const qreal s = qBound(fitScale(), scale() * factor, maxScale());
+    setTransformOriginPoint(mapFromScene(scenePos));
+    setScale(s);
+    clampToZone();
+}
+
 void PhotoItem::wheelEvent(QGraphicsSceneWheelEvent *event)
 {
     QT_WARNING_PUSH
@@ -349,11 +371,13 @@ void PhotoItem::wheelEvent(QGraphicsSceneWheelEvent *event)
         event->ignore();
         return;
     }
-    const qreal factor = std::pow(1.15, dy / 120.0);
-    const qreal s = qBound(fitScale(), scale() * factor, maxScale());
-    setTransformOriginPoint(mapFromScene(event->scenePos()));
-    setScale(s);
-    clampToZone();
+    // 一次连续滚动只记一个撤销快照
+    if (m_lastWheelUndo.elapsed() > 800) {
+        if (CanvasView *view = viewFor(this))
+            view->pushUndoSnapshot();
+        m_lastWheelUndo.restart();
+    }
+    zoomBy(std::pow(1.15, dy / 120.0), event->scenePos());
     event->accept();
 }
 
@@ -437,6 +461,8 @@ TextItem::TextItem(const QString &text, QGraphicsItem *parent)
 
 void TextItem::startEdit()
 {
+    if (CanvasView *view = viewFor(this))
+        view->pushUndoSnapshot();
     setTextInteractionFlags(Qt::TextEditorInteraction);
     setFocus(Qt::MouseFocusReason);
     QTextCursor cursor = textCursor();
@@ -580,6 +606,7 @@ void CanvasView::applyLayout(int index)
     }
 
     m_layoutIndex = index;
+    emit layoutChanged(index);
     fitScene();
 }
 
@@ -618,6 +645,7 @@ bool CanvasView::importInto(PhotoZone *zone, const QString &path)
         emit statusMessage(tr("无法读取图片：%1").arg(QFileInfo(path).fileName()));
         return false;
     }
+    pushUndoSnapshot();
     zone->setImage(image, path);
     return true;
 }
@@ -656,6 +684,7 @@ TextItem *CanvasView::createTextItem(const QString &text)
 
 void CanvasView::addText(const QString &text)
 {
+    pushUndoSnapshot();
     TextItem *item = createTextItem(text);
     int count = 0;
     const QList<QGraphicsItem *> items = m_scene.items();
@@ -678,6 +707,8 @@ void CanvasView::applyStyleToSelection(int pixelSize, const QColor &color)
 {
     bool applied = false;
     const QList<QGraphicsItem *> selected = m_scene.selectedItems();
+    if (!selected.isEmpty())
+        pushUndoSnapshot();
     for (QGraphicsItem *item : selected) {
         if (auto *text = dynamic_cast<TextItem *>(item)) {
             QFont f = text->font();
@@ -693,6 +724,7 @@ void CanvasView::applyStyleToSelection(int pixelSize, const QColor &color)
 
 void CanvasView::setTemplateText(const QStringList &lines)
 {
+    pushUndoSnapshot();
     for (TextItem *item : m_templateItems) {
         m_scene.removeItem(item);
         delete item;
@@ -718,6 +750,7 @@ void CanvasView::removeSelected()
     const QList<QGraphicsItem *> selected = m_scene.selectedItems();
     if (selected.isEmpty())
         return;
+    pushUndoSnapshot();
     for (QGraphicsItem *item : selected) {
         if (auto *photo = dynamic_cast<PhotoItem *>(item)) {
             if (PhotoZone *zone = photo->zone())
@@ -732,6 +765,7 @@ void CanvasView::removeSelected()
 
 void CanvasView::clearContent()
 {
+    pushUndoSnapshot();
     const QList<QGraphicsItem *> items = m_scene.items();
     for (QGraphicsItem *item : items) {
         if (auto *photo = dynamic_cast<PhotoItem *>(item)) {
@@ -826,7 +860,7 @@ bool CanvasView::exportPdf(const QString &path)
     return true;
 }
 
-bool CanvasView::saveProject(const QString &path)
+QByteArray CanvasView::serializeScene() const
 {
     QJsonObject root;
     root.insert(QStringLiteral("version"), 1);
@@ -861,26 +895,21 @@ bool CanvasView::saveProject(const QString &path)
         }
     }
     root.insert(QStringLiteral("texts"), textArray);
-
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly))
-        return false;
-    file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-    return true;
+    return QJsonDocument(root).toJson(QJsonDocument::Compact);
 }
 
-bool CanvasView::loadProject(const QString &path)
+bool CanvasView::deserializeScene(const QByteArray &data, int *missingOut)
 {
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly))
-        return false;
     QJsonParseError error;
-    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &error);
+    const QJsonDocument doc = QJsonDocument::fromJson(data, &error);
     if (error.error != QJsonParseError::NoError || !doc.isObject())
         return false;
     const QJsonObject root = doc.object();
 
+    // 恢复期间暂停撤销快照
+    m_undoSuspended = true;
     applyLayout(root.value(QStringLiteral("layout")).toInt(0));
+    m_undoSuspended = false;
     m_textPixelSize = root.value(QStringLiteral("textPixelSize")).toInt(28);
     m_textColor = QColor(root.value(QStringLiteral("textColor")).toString(QStringLiteral("#1f2937")));
 
@@ -920,11 +949,54 @@ bool CanvasView::loadProject(const QString &path)
         item->setPos(o.value(QStringLiteral("x")).toDouble(), o.value(QStringLiteral("y")).toDouble());
     }
 
+    if (missingOut)
+        *missingOut = missing;
+    return true;
+}
+
+bool CanvasView::saveProject(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly))
+        return false;
+    file.write(serializeScene());
+    return true;
+}
+
+bool CanvasView::loadProject(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return false;
+    const QByteArray data = file.readAll();
+    int missing = 0;
+    if (!deserializeScene(data, &missing))
+        return false;
+    m_undoStack.clear();
     if (missing > 0)
         emit statusMessage(tr("已打开工程，%1 张图片未找到").arg(missing));
     else
         emit statusMessage(tr("已打开工程"));
     return true;
+}
+
+void CanvasView::pushUndoSnapshot()
+{
+    if (m_undoSuspended)
+        return;
+    m_undoStack.append(serializeScene());
+    if (m_undoStack.size() > 50)
+        m_undoStack.removeFirst();
+}
+
+void CanvasView::undo()
+{
+    if (m_undoStack.isEmpty()) {
+        emit statusMessage(tr("没有可撤销的操作"));
+        return;
+    }
+    deserializeScene(m_undoStack.takeLast());
+    emit statusMessage(tr("已撤销"));
 }
 
 // ---------------------------------------------------------------------------
@@ -1011,13 +1083,17 @@ void CanvasView::mouseDoubleClickEvent(QMouseEvent *event)
 
 void CanvasView::wheelEvent(QWheelEvent *event)
 {
-    // 图片条目自己处理缩放；空白处不滚动。
-    event->ignore();
+    // 交给场景分发：图片条目收到后自行缩放；空白处无滚动条、无可见效果
+    QGraphicsView::wheelEvent(event);
 }
 
 void CanvasView::keyPressEvent(QKeyEvent *event)
 {
     const int key = event->key();
+    if (event->modifiers() & Qt::ControlModifier && key == Qt::Key_Z) {
+        undo();
+        return;
+    }
     if (key == Qt::Key_Delete || key == Qt::Key_Backspace) {
         if (auto *text = dynamic_cast<TextItem *>(m_scene.focusItem())) {
             if (text->textInteractionFlags() != Qt::NoTextInteraction) {
