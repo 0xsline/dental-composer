@@ -36,6 +36,7 @@ endif()
 
 if(WIN32)
     set_target_properties(dental-composer PROPERTIES WIN32_EXECUTABLE TRUE)
+    target_sources(dental-composer PRIVATE resources/app.rc)
 endif()
 
 if(APPLE)

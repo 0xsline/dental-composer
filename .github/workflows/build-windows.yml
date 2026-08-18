@@ -45,6 +45,27 @@ jobs:
           if (-not (Test-Path build-win\Release\vcruntime140.dll)) { throw "vcruntime140.dll missing" }
           if (-not (Test-Path build-win\Release\ucrtbase.dll)) { throw "ucrtbase.dll missing" }
 
+      - name: Prepare signing
+        shell: pwsh
+        env:
+          CERT_BASE64: ${{ secrets.CODE_SIGN_CERT_BASE64 }}
+        run: |
+          if ($env:CERT_BASE64) { "HAS_CERT=true" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii }
+
+      - name: Sign binaries (runs only when certificate secrets exist)
+        if: env.HAS_CERT == 'true'
+        shell: pwsh
+        env:
+          CERT_BASE64: ${{ secrets.CODE_SIGN_CERT_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.CODE_SIGN_CERT_PASSWORD }}
+        run: |
+          $pfx = "$env:RUNNER_TEMP\code-sign.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERT_BASE64))
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+                      Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+          & $signtool.FullName sign /f $pfx /p $env:CERT_PASSWORD /fd sha256 `
+              /tr http://timestamp.digicert.com /td sha256 build-win/Release/dental-composer.exe
+
       - name: Build NSIS installer
         working-directory: scripts
         run: makensis /DAPP_DIR=..\build-win\Release installer.nsi
