@@ -166,7 +166,26 @@ int runSelftest(const QString &outPath)
         std::fprintf(stderr, "SELFTEST FAIL: pdf too small\n");
         return 16;
     }
+    // 拖边缩放：右下角句柄外拖 → 放大；内拖回 → 缩小；且始终覆盖分区
+    canvas->applyLayout(0);
+    PhotoZone *rz = canvas->zones().at(0);
+    rz->setImage(source[0]);
+    PhotoItem *ritem = rz->item();
+    ritem->setSelected(true);
+    const QRectF zr = rz->rect();
+    const qreal scaleFit = ritem->scale();
+    ritem->applyResize(PhotoItem::ResizeHandle::CornerBottomRight,
+                       zr.bottomRight() + QPointF(400.0, 400.0));
+    const QPointF anchor = zr.topLeft(); // CornerBottomRight 的锚点
+    ritem->applyResize(PhotoItem::ResizeHandle::CornerBottomRight,
+                       anchor + (zr.bottomRight() - anchor) * 0.25);
+    if (qAbs(ritem->scale() - scaleFit) > 0.001) {
+        std::fprintf(stderr, "SELFTEST FAIL: resize did not zoom back to fit (%.3f vs %.3f)\n",
+                     ritem->scale(), scaleFit);
+        return 18;
+    }
+    ritem->setSelected(false);
 
-    std::printf("SELFTEST OK %s (%d layouts, project+pdf)\n", qPrintable(outPath), canvas->layoutCount());
+    std::printf("SELFTEST OK %s (%d layouts, project+pdf+resize)\n", qPrintable(outPath), canvas->layoutCount());
     return 0;
 }

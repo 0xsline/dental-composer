@@ -62,6 +62,7 @@ PhotoItem::PhotoItem(const QImage &original, const QImage &display, PhotoZone *z
     , m_zone(zone)
 {
     setFlag(QGraphicsItem::ItemIsSelectable, true);
+    setAcceptHoverEvents(true);
     setCursor(Qt::OpenHandCursor);
     setTransformationMode(Qt::SmoothTransformation);
     // 矩形图片用包围盒命中检测（免逐像素 mask）；拖动平移时用设备缓存，缩放时才重建
@@ -126,11 +127,170 @@ void PhotoItem::paint(QPainter *painter, const QStyleOptionGraphicsItem *option,
     painter->setClipPath(localClipPath());
     QGraphicsPixmapItem::paint(painter, option, widget);
     painter->restore();
+
+    // 选中时画拖边缩放句柄（分区四角 + 四边中点）
+    if (isSelected() && m_zone) {
+        const QPolygonF z = mapFromParent(QRectF(m_zone->rect()));
+        if (z.size() < 4)
+            return;
+        const QPointF c[4] = { z.at(0), z.at(1), z.at(2), z.at(3) };
+        const QPointF e[4] = {
+            (c[0] + c[1]) / 2, (c[1] + c[2]) / 2, (c[2] + c[3]) / 2, (c[3] + c[0]) / 2
+        };
+        const qreal sz = 9.0 / scale();
+        painter->setRenderHint(QPainter::Antialiasing, false);
+        painter->setPen(QPen(QColor(0x2b, 0x57, 0x9a), qMax(1.0, 1.5 / scale())));
+        painter->setBrush(Qt::white);
+        for (int i = 0; i < 4; ++i) {
+            painter->drawRect(QRectF(c[i].x() - sz / 2, c[i].y() - sz / 2, sz, sz));
+            painter->drawRect(QRectF(e[i].x() - sz / 2, e[i].y() - sz / 2, sz, sz));
+        }
+    }
+}
+
+PhotoItem::ResizeHandle PhotoItem::handleAt(const QPointF &scenePos) const
+{
+    if (!m_zone)
+        return ResizeHandle::None;
+    const QRectF z = m_zone->rect();
+    const qreal r = 14.0; // 命中半径（场景坐标）
+    static const ResizeHandle corners[4] = {
+        ResizeHandle::CornerTopLeft, ResizeHandle::CornerTopRight,
+        ResizeHandle::CornerBottomRight, ResizeHandle::CornerBottomLeft
+    };
+    static const ResizeHandle edges[4] = {
+        ResizeHandle::EdgeTop, ResizeHandle::EdgeRight,
+        ResizeHandle::EdgeBottom, ResizeHandle::EdgeLeft
+    };
+    const QPointF c[4] = { z.topLeft(), z.topRight(), z.bottomRight(), z.bottomLeft() };
+    for (int i = 0; i < 4; ++i) {
+        if (QLineF(scenePos, c[i]).length() <= r)
+            return corners[i];
+    }
+    for (int i = 0; i < 4; ++i) {
+        const QPointF mid = (c[i] + c[(i + 1) % 4]) / 2;
+        if (QLineF(scenePos, mid).length() <= r)
+            return edges[i];
+    }
+    return ResizeHandle::None;
+}
+
+QPointF PhotoItem::resizeAnchor(ResizeHandle handle) const
+{
+    const QRectF z = m_zone->rect();
+    switch (handle) {
+    case ResizeHandle::CornerTopLeft:
+        return z.bottomRight();
+    case ResizeHandle::CornerTopRight:
+        return z.bottomLeft();
+    case ResizeHandle::CornerBottomRight:
+        return z.topLeft();
+    case ResizeHandle::CornerBottomLeft:
+        return z.topRight();
+    case ResizeHandle::EdgeLeft:
+        return QPointF(z.right(), z.center().y());
+    case ResizeHandle::EdgeRight:
+        return QPointF(z.left(), z.center().y());
+    case ResizeHandle::EdgeTop:
+        return QPointF(z.center().x(), z.bottom());
+    case ResizeHandle::EdgeBottom:
+        return QPointF(z.center().x(), z.top());
+    default:
+        return z.center();
+    }
+}
+
+qreal PhotoItem::resizeFactor(ResizeHandle handle, const QPointF &mouseScene) const
+{
+    const QRectF z = m_zone->rect();
+    const QPointF anchor = resizeAnchor(handle);
+    switch (handle) {
+    case ResizeHandle::EdgeLeft:
+    case ResizeHandle::EdgeRight: {
+        const qreal d0 = qAbs(z.center().x() - anchor.x());
+        const qreal d1 = qAbs(mouseScene.x() - anchor.x());
+        return d1 / qMax(d0, 1.0);
+    }
+    case ResizeHandle::EdgeTop:
+    case ResizeHandle::EdgeBottom: {
+        const qreal d0 = qAbs(z.center().y() - anchor.y());
+        const qreal d1 = qAbs(mouseScene.y() - anchor.y());
+        return d1 / qMax(d0, 1.0);
+    }
+    default: {
+        // 角：对角线距离比（等比缩放）
+        QPointF corner = z.topLeft();
+        if (handle == ResizeHandle::CornerTopRight)
+            corner = z.topRight();
+        else if (handle == ResizeHandle::CornerBottomRight)
+            corner = z.bottomRight();
+        else if (handle == ResizeHandle::CornerBottomLeft)
+            corner = z.bottomLeft();
+        const qreal d0 = QLineF(corner, anchor).length();
+        const qreal d1 = QLineF(mouseScene, anchor).length();
+        return d1 / qMax(d0, 1.0);
+    }
+    }
+}
+
+void PhotoItem::applyResize(ResizeHandle handle, const QPointF &mouseScene)
+{
+    if (handle == ResizeHandle::None)
+        return;
+    const qreal f = resizeFactor(handle, mouseScene);
+    const qreal s = qBound(fitScale(), scale() * f, maxScale());
+    const qreal actual = s / scale();
+    const QPointF anchor = resizeAnchor(handle);
+    setScale(s);
+    // 保持锚点（对边/对角）不动
+    setPos(anchor - (anchor - pos()) * actual);
+    clampToZone();
+}
+
+void PhotoItem::hoverMoveEvent(QGraphicsSceneHoverEvent *event)
+{
+    if (isSelected()) {
+        switch (handleAt(event->scenePos())) {
+        case ResizeHandle::CornerTopLeft:
+        case ResizeHandle::CornerBottomRight:
+            setCursor(Qt::SizeFDiagCursor);
+            break;
+        case ResizeHandle::CornerTopRight:
+        case ResizeHandle::CornerBottomLeft:
+            setCursor(Qt::SizeBDiagCursor);
+            break;
+        case ResizeHandle::EdgeLeft:
+        case ResizeHandle::EdgeRight:
+            setCursor(Qt::SizeHorCursor);
+            break;
+        case ResizeHandle::EdgeTop:
+        case ResizeHandle::EdgeBottom:
+            setCursor(Qt::SizeVerCursor);
+            break;
+        default:
+            setCursor(Qt::OpenHandCursor);
+            break;
+        }
+    } else {
+        setCursor(Qt::OpenHandCursor);
+    }
+    QGraphicsPixmapItem::hoverMoveEvent(event);
 }
 
 void PhotoItem::mousePressEvent(QGraphicsSceneMouseEvent *event)
 {
     if (event->button() == Qt::LeftButton) {
+        // 选中状态下按住拖边句柄 → 缩放；否则平移
+        if (isSelected()) {
+            const ResizeHandle handle = handleAt(event->scenePos());
+            if (handle != ResizeHandle::None) {
+                m_resizing = true;
+                m_resizeHandle = handle;
+                m_resizeAnchor = resizeAnchor(handle);
+                event->accept();
+                return;
+            }
+        }
         m_dragging = true;
         m_lastScenePos = event->scenePos();
         setCursor(Qt::ClosedHandCursor);
@@ -143,6 +303,11 @@ void PhotoItem::mousePressEvent(QGraphicsSceneMouseEvent *event)
 
 void PhotoItem::mouseMoveEvent(QGraphicsSceneMouseEvent *event)
 {
+    if (m_resizing) {
+        applyResize(m_resizeHandle, event->scenePos());
+        event->accept();
+        return;
+    }
     if (m_dragging) {
         const QPointF delta = event->scenePos() - m_lastScenePos;
         m_lastScenePos = event->scenePos();
@@ -156,6 +321,13 @@ void PhotoItem::mouseMoveEvent(QGraphicsSceneMouseEvent *event)
 
 void PhotoItem::mouseReleaseEvent(QGraphicsSceneMouseEvent *event)
 {
+    if (m_resizing) {
+        m_resizing = false;
+        m_resizeHandle = ResizeHandle::None;
+        setCursor(Qt::OpenHandCursor);
+        event->accept();
+        return; // 缩放拖拽不触发跨分区移动
+    }
     if (m_dragging) {
         m_dragging = false;
         setCursor(Qt::OpenHandCursor);

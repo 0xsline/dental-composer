@@ -36,9 +36,17 @@ struct LayoutSpec
 class PhotoItem : public QGraphicsPixmapItem
 {
 public:
+    // 拖边缩放句柄：四角 + 四边中点
+    enum class ResizeHandle {
+        None,
+        CornerTopLeft, CornerTopRight, CornerBottomRight, CornerBottomLeft,
+        EdgeTop, EdgeRight, EdgeBottom, EdgeLeft
+    };
+
     PhotoItem(const QImage &original, const QImage &display, PhotoZone *zone);
 
     void fitToZone();
+    void applyResize(ResizeHandle handle, const QPointF &mouseScene); // 以对边/对角为锚点缩放
     QPainterPath localClipPath() const;
     PhotoZone *zone() const { return m_zone; }
     QImage image() const { return m_image; }
@@ -48,6 +56,7 @@ public:
 
 protected:
     void paint(QPainter *painter, const QStyleOptionGraphicsItem *option, QWidget *widget = nullptr) override;
+    void hoverMoveEvent(QGraphicsSceneHoverEvent *event) override;
     void mousePressEvent(QGraphicsSceneMouseEvent *event) override;
     void mouseMoveEvent(QGraphicsSceneMouseEvent *event) override;
     void mouseReleaseEvent(QGraphicsSceneMouseEvent *event) override;
@@ -58,12 +67,18 @@ private:
     void clampToZone();
     qreal fitScale() const;
     qreal maxScale() const;
+    ResizeHandle handleAt(const QPointF &scenePos) const;
+    QPointF resizeAnchor(ResizeHandle handle) const;
+    qreal resizeFactor(ResizeHandle handle, const QPointF &mouseScene) const;
 
-    QImage m_image;      // 原图（导出/移动时用）
+    QImage m_image;       // 原图（导出/移动时用）
     QString m_sourcePath; // 源文件路径（工程保存用）
     PhotoZone *m_zone = nullptr;
     QPointF m_lastScenePos;
+    QPointF m_resizeAnchor;
+    ResizeHandle m_resizeHandle = ResizeHandle::None;
     bool m_dragging = false;
+    bool m_resizing = false;
 };
 
 // 画布上的一个分区：背景、名称标签，容纳一张图片。
