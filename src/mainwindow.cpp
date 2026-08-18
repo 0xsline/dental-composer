@@ -19,6 +19,7 @@
 #include <QPrintDialog>
 #include <QPrintPreviewDialog>
 #include <QPrinter>
+#include <QSettings>
 #include <QSpinBox>
 #include <QStandardPaths>
 #include <QStatusBar>
@@ -26,6 +27,28 @@
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
+
+namespace {
+
+const char kLastImportDir[] = "paths/lastImportDir";
+const char kLastExportDir[] = "paths/lastExportDir";
+
+QString rememberedDir(const char *key, QStandardPaths::StandardLocation fallback)
+{
+    const QString dir = QSettings().value(QLatin1String(key)).toString();
+    if (!dir.isEmpty() && QFileInfo::exists(dir) && QFileInfo(dir).isDir())
+        return dir;
+    return QStandardPaths::writableLocation(fallback);
+}
+
+void rememberDir(const char *key, const QString &path)
+{
+    if (path.isEmpty())
+        return;
+    QSettings().setValue(QLatin1String(key), QFileInfo(path).absolutePath());
+}
+
+} // namespace
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -44,6 +67,8 @@ MainWindow::MainWindow(QWidget *parent)
     QAction *actOpenProject = fileMenu->addAction(tr("打开工程…"));
     QAction *actSaveProject = fileMenu->addAction(tr("保存工程…"));
     fileMenu->addSeparator();
+    QAction *actCopyImage = fileMenu->addAction(tr("复制拼图"));
+    fileMenu->addSeparator();
     QAction *actExportPdf = fileMenu->addAction(tr("导出 PDF…"));
     QAction *actPrintPreview = fileMenu->addAction(tr("打印预览…"));
     QAction *actPrint = fileMenu->addAction(tr("打印…"));
@@ -54,6 +79,8 @@ MainWindow::MainWindow(QWidget *parent)
 
     QMenu *editMenu = menuBar()->addMenu(tr("编辑"));
     QAction *actPatient = editMenu->addAction(tr("患者信息…"));
+    QAction *actRotateLeft = editMenu->addAction(tr("左转 90°"));
+    QAction *actRotateRight = editMenu->addAction(tr("右转 90°"));
     editMenu->addSeparator();
 
     QMenu *helpMenu = menuBar()->addMenu(tr("帮助"));
@@ -75,8 +102,14 @@ MainWindow::MainWindow(QWidget *parent)
     QAction *actText = toolBar->addAction(style()->standardIcon(QStyle::SP_FileDialogContentsView), tr("添加文字"));
     actText->setToolTip(tr("在画布上添加一条文字，双击编辑"));
     QAction *actRemove = toolBar->addAction(style()->standardIcon(QStyle::SP_TrashIcon), tr("移除选中"));
+    toolBar->addAction(actRotateLeft);
+    actRotateLeft->setToolTip(tr("选中的图片逆时针转 90°"));
+    toolBar->addAction(actRotateRight);
+    actRotateRight->setToolTip(tr("选中的图片顺时针转 90°"));
     QAction *actClear = toolBar->addAction(tr("清空画布"));
     QAction *actExport = toolBar->addAction(style()->standardIcon(QStyle::SP_DialogSaveButton), tr("导出图片"));
+    toolBar->addAction(actCopyImage);
+    actCopyImage->setToolTip(tr("复制高清拼图到剪贴板，可直接粘贴到微信"));
 
     toolBar->addSeparator();
     toolBar->addWidget(new QLabel(tr(" 字号 "), toolBar));
@@ -116,6 +149,9 @@ MainWindow::MainWindow(QWidget *parent)
     connect(actRemove, &QAction::triggered, m_canvas, &CanvasView::removeSelected);
     connect(actClear, &QAction::triggered, this, &MainWindow::onClear);
     connect(actExport, &QAction::triggered, this, &MainWindow::onExport);
+    connect(actCopyImage, &QAction::triggered, this, &MainWindow::onCopyImage);
+    connect(actRotateLeft, &QAction::triggered, this, &MainWindow::onRotateLeft);
+    connect(actRotateRight, &QAction::triggered, this, &MainWindow::onRotateRight);
     connect(actOpenProject, &QAction::triggered, this, &MainWindow::onOpenProject);
     connect(actSaveProject, &QAction::triggered, this, &MainWindow::onSaveProject);
     connect(actExportPdf, &QAction::triggered, this, &MainWindow::onExportPdf);
@@ -168,10 +204,31 @@ void MainWindow::updateColorButton()
 
 void MainWindow::onImport()
 {
-    const QStringList files = QFileDialog::getOpenFileNames(this, tr("选择图片"), QString(),
-        tr("图片 (*.png *.jpg *.jpeg *.bmp *.gif *.tif *.tiff)"));
-    if (!files.isEmpty())
-        m_canvas->importImages(files);
+    const QString startDir = rememberedDir(kLastImportDir, QStandardPaths::PicturesLocation);
+    const QStringList files = QFileDialog::getOpenFileNames(this, tr("选择图片"), startDir,
+        tr("图片 (*.png *.jpg *.jpeg *.bmp *.gif *.tif *.tiff *.heic *.heif *.webp)"));
+    if (files.isEmpty())
+        return;
+    rememberDir(kLastImportDir, files.first());
+    m_canvas->importImages(files);
+}
+
+void MainWindow::onRotateLeft()
+{
+    m_canvas->rotateSelected(-1);
+}
+
+void MainWindow::onRotateRight()
+{
+    m_canvas->rotateSelected(1);
+}
+
+void MainWindow::onCopyImage()
+{
+    if (m_canvas->copyImageToClipboard(2.0))
+        statusBar()->showMessage(tr("已复制拼图，可直接粘贴到微信"), 8000);
+    else
+        QMessageBox::warning(this, tr("复制失败"), tr("无法写入剪贴板。"));
 }
 
 void MainWindow::onAddText()
@@ -227,7 +284,7 @@ void MainWindow::onExport()
     QString selectedFilter;
     // 默认存到用户"图片"目录：Win7 安装版运行时 cwd 是 Program Files（无写权限），
     // 相对默认名会导致"导出失败"
-    const QString defaultDir = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
+    const QString defaultDir = rememberedDir(kLastExportDir, QStandardPaths::PicturesLocation);
     const QString path = QFileDialog::getSaveFileName(this, tr("导出图片"),
         defaultDir + QStringLiteral("/") + tr("拼图结果.png"),
         tr("PNG 图片 (*.png);;JPEG 图片 (*.jpg)"), &selectedFilter);
@@ -236,6 +293,7 @@ void MainWindow::onExport()
     ExportDialog dialog(this);
     if (dialog.exec() != QDialog::Accepted)
         return;
+    rememberDir(kLastExportDir, path);
     if (m_canvas->exportImage(path, dialog.scale())) {
         statusBar()->showMessage(tr("已导出：%1").arg(QFileInfo(path).fileName()), 8000);
     } else {
@@ -247,11 +305,12 @@ void MainWindow::onExport()
 
 void MainWindow::onExportPdf()
 {
-    const QString defaultDir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    const QString defaultDir = rememberedDir(kLastExportDir, QStandardPaths::DocumentsLocation);
     const QString path = QFileDialog::getSaveFileName(this, tr("导出 PDF"),
         defaultDir + QStringLiteral("/") + tr("拼图结果.pdf"), tr("PDF 文件 (*.pdf)"));
     if (path.isEmpty())
         return;
+    rememberDir(kLastExportDir, path);
     if (m_canvas->exportPdf(path))
         statusBar()->showMessage(tr("已导出 PDF：%1").arg(QFileInfo(path).fileName()), 8000);
     else
@@ -296,11 +355,12 @@ void MainWindow::onPrintPreview()
 
 void MainWindow::onSaveProject()
 {
-    const QString defaultDir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    const QString defaultDir = rememberedDir(kLastExportDir, QStandardPaths::DocumentsLocation);
     const QString path = QFileDialog::getSaveFileName(this, tr("保存工程"),
         defaultDir + QStringLiteral("/") + tr("未命名.dcp"), tr("牙片拼图工程 (*.dcp)"));
     if (path.isEmpty())
         return;
+    rememberDir(kLastExportDir, path);
     if (m_canvas->saveProject(path))
         statusBar()->showMessage(tr("已保存工程：%1").arg(QFileInfo(path).fileName()), 8000);
     else
@@ -309,11 +369,12 @@ void MainWindow::onSaveProject()
 
 void MainWindow::onOpenProject()
 {
-    const QString defaultDir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    const QString defaultDir = rememberedDir(kLastImportDir, QStandardPaths::DocumentsLocation);
     const QString path = QFileDialog::getOpenFileName(this, tr("打开工程"),
         defaultDir, tr("牙片拼图工程 (*.dcp)"));
     if (path.isEmpty())
         return;
+    rememberDir(kLastImportDir, path);
     if (!m_canvas->loadProject(path))
         QMessageBox::warning(this, tr("打开失败"), tr("无法读取工程文件：\n%1").arg(path));
 }

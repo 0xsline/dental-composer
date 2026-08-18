@@ -5,11 +5,13 @@
 #include "canvasview.h"
 #include "mainwindow.h"
 
+#include <QClipboard>
 #include <QColor>
 #include <QCoreApplication>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QElapsedTimer>
+#include <QGuiApplication>
 #include <QFileInfo>
 #include <QFont>
 #include <QImage>
@@ -277,6 +279,64 @@ int runSelftest(const QString &outPath)
         return 30;
     }
 
-    std::printf("SELFTEST OK %s (%d layouts, project+pdf+resize+undo+drop)\n", qPrintable(outPath), canvas->layoutCount());
+    // 旋转 90°：宽高对调，撤销恢复；工程文件记下 rotation
+    canvas->applyLayout(0);
+    canvas->zones().at(0)->setImage(source[0], src1);
+    PhotoItem *rotItem = canvas->zones().at(0)->item();
+    const int w0 = rotItem->image().width();
+    const int h0 = rotItem->image().height();
+    rotItem->setSelected(true);
+    canvas->rotateSelected(1);
+    rotItem = canvas->zones().at(0)->item();
+    if (!rotItem || rotItem->image().width() != h0 || rotItem->image().height() != w0
+        || rotItem->rotationDegrees() != 90) {
+        std::fprintf(stderr, "SELFTEST FAIL: rotate 90 did not swap size (rot=%d %dx%d)\n",
+                     rotItem ? rotItem->rotationDegrees() : -1,
+                     rotItem ? rotItem->image().width() : 0,
+                     rotItem ? rotItem->image().height() : 0);
+        return 31;
+    }
+    canvas->undo();
+    rotItem = canvas->zones().at(0)->item();
+    if (!rotItem || rotItem->image().width() != w0 || rotItem->rotationDegrees() != 0) {
+        std::fprintf(stderr, "SELFTEST FAIL: undo did not restore rotation\n");
+        return 32;
+    }
+    rotItem->setSelected(true);
+    canvas->rotateSelected(1);
+    const QString rotProj = dir + QStringLiteral("/") + base + QStringLiteral("_rot.dcp");
+    if (!canvas->saveProject(rotProj) || !canvas->loadProject(rotProj)) {
+        std::fprintf(stderr, "SELFTEST FAIL: rotate project roundtrip io\n");
+        return 33;
+    }
+    rotItem = canvas->zones().at(0)->item();
+    if (!rotItem || rotItem->rotationDegrees() != 90
+        || rotItem->image().width() != h0 || rotItem->image().height() != w0) {
+        std::fprintf(stderr, "SELFTEST FAIL: project did not restore rotation\n");
+        return 34;
+    }
+
+    // 复制拼图：2× 必须是 3200×2200
+    canvas->applyLayout(0);
+    canvas->zones().at(0)->setImage(source[0], src1);
+    const QImage raster = canvas->renderToImage(2.0);
+    if (raster.width() != 3200 || raster.height() != 2200) {
+        std::fprintf(stderr, "SELFTEST FAIL: renderToImage size %dx%d\n",
+                     raster.width(), raster.height());
+        return 35;
+    }
+    if (!canvas->copyImageToClipboard(2.0)) {
+        std::fprintf(stderr, "SELFTEST FAIL: copyImageToClipboard failed\n");
+        return 36;
+    }
+    const QImage clipped = QGuiApplication::clipboard()->image();
+    if (clipped.width() != 3200 || clipped.height() != 2200) {
+        std::fprintf(stderr, "SELFTEST FAIL: clipboard image size %dx%d\n",
+                     clipped.width(), clipped.height());
+        return 37;
+    }
+
+    std::printf("SELFTEST OK %s (%d layouts, project+pdf+resize+undo+drop+rotate+copy)\n",
+                qPrintable(outPath), canvas->layoutCount());
     return 0;
 }

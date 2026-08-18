@@ -31,6 +31,9 @@ private slots:
     void onPickColor();
     void onClear();
     void onLayoutChanged(int index);
+    void onRotateLeft();
+    void onRotateRight();
+    void onCopyImage();
 
 private:
     void updateColorButton();

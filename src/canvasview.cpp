@@ -16,8 +16,11 @@
 #include <QKeyEvent>
 #include <QMimeData>
 #include <QMouseEvent>
+#include <QGuiApplication>
+#include <QClipboard>
 #include <QPainter>
 #include <QPainterPath>
+#include <QTransform>
 #include <QScrollBar>
 #include <QStyleOptionGraphicsItem>
 #include <QTextCursor>
@@ -138,6 +141,56 @@ QPainterPath PhotoItem::shape() const
     QPainterPath path;
     path.addRect(boundingRect());
     return path;
+}
+
+int PhotoItem::normalizeRotation(int degrees)
+{
+    degrees %= 360;
+    if (degrees < 0)
+        degrees += 360;
+    return (degrees / 90) * 90;
+}
+
+void PhotoItem::refreshDisplayPixmap()
+{
+    if (m_image.isNull())
+        return;
+    QImage display = m_image;
+    if (m_zone) {
+        const QRectF zr = m_zone->rect();
+        const qreal ratio = qMin(zr.width() * 3.0 / m_image.width(),
+                                 zr.height() * 3.0 / m_image.height());
+        if (ratio < 1.0)
+            display = m_image.scaled(QSize(int(m_image.width() * ratio), int(m_image.height() * ratio)),
+                                     Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+    setPixmap(QPixmap::fromImage(display));
+}
+
+void PhotoItem::applyStoredRotation(int degrees)
+{
+    const int target = normalizeRotation(degrees);
+    const int delta = (target - m_rotation + 360) % 360;
+    if (delta == 0 || m_image.isNull()) {
+        m_rotation = target;
+        return;
+    }
+    QTransform transform;
+    transform.rotate(delta);
+    m_image = m_image.transformed(transform, Qt::FastTransformation);
+    m_rotation = target;
+    refreshDisplayPixmap();
+}
+
+void PhotoItem::rotateBy90(int quarterTurns)
+{
+    if (m_image.isNull() || quarterTurns == 0)
+        return;
+    const QPointF center = imageSceneRect().center();
+    applyStoredRotation(m_rotation + 90 * quarterTurns);
+    const QSizeF sz = QSizeF(pixmap().size()) * scale();
+    setPos(center - QPointF(sz.width() / 2.0, sz.height() / 2.0));
+    clampToZone();
 }
 
 void PhotoItem::fitToZone()
@@ -960,8 +1013,11 @@ void CanvasView::requestMoveBetweenZones(PhotoItem *item, const QPointF &scenePo
             return;
         const QString sourcePath = item->sourcePath();
         const QImage image = item->image();
+        const int rotation = item->rotationDegrees();
         src->takeImage();
         dst->setImage(image, sourcePath);
+        if (PhotoItem *moved = dst->item())
+            moved->setRotationField(rotation);
         emit statusMessage(tr("图片已移动到“%1”").arg(dst->label()));
     });
 }
@@ -986,7 +1042,7 @@ void CanvasView::renderContent(QPainter *painter, const QRectF &target)
     }
 }
 
-bool CanvasView::exportImage(const QString &path, qreal scale)
+QImage CanvasView::renderToImage(qreal scale)
 {
     if (scale <= 0.0)
         scale = 2.0;
@@ -999,6 +1055,12 @@ bool CanvasView::exportImage(const QString &path, qreal scale)
         QPainter painter(&image);
         renderContent(&painter, QRectF(0, 0, image.width(), image.height()));
     }
+    return image;
+}
+
+bool CanvasView::exportImage(const QString &path, qreal scale)
+{
+    const QImage image = renderToImage(scale);
     const QString suffix = QFileInfo(path).suffix().toLower();
     bool ok = false;
     if (suffix == QStringLiteral("jpg") || suffix == QStringLiteral("jpeg"))
@@ -1008,6 +1070,39 @@ bool CanvasView::exportImage(const QString &path, qreal scale)
     if (!ok)
         emit statusMessage(tr("导出失败：%1").arg(path));
     return ok;
+}
+
+bool CanvasView::copyImageToClipboard(qreal scale)
+{
+    const QImage image = renderToImage(scale);
+    if (image.isNull())
+        return false;
+    QClipboard *clipboard = QGuiApplication::clipboard();
+    if (!clipboard)
+        return false;
+    clipboard->setImage(image);
+    emit statusMessage(tr("已复制拼图，可直接粘贴到微信"));
+    return true;
+}
+
+void CanvasView::rotateSelected(int quarterTurns)
+{
+    if (quarterTurns == 0)
+        return;
+    QList<PhotoItem *> photos;
+    const QList<QGraphicsItem *> selected = m_scene.selectedItems();
+    for (QGraphicsItem *item : selected) {
+        if (auto *photo = dynamic_cast<PhotoItem *>(item))
+            photos.append(photo);
+    }
+    if (photos.isEmpty()) {
+        emit statusMessage(tr("请先点选一张图片再旋转"));
+        return;
+    }
+    pushUndoSnapshot();
+    for (PhotoItem *photo : photos)
+        photo->rotateBy90(quarterTurns);
+    emit statusMessage(tr("已旋转选中图片"));
 }
 
 bool CanvasView::exportPdf(const QString &path)
@@ -1044,6 +1139,7 @@ QByteArray CanvasView::serializeScene() const
             o.insert(QStringLiteral("x"), item->pos().x());
             o.insert(QStringLiteral("y"), item->pos().y());
             o.insert(QStringLiteral("scale"), item->scale());
+            o.insert(QStringLiteral("rotation"), item->rotationDegrees());
         }
         zoneArray.append(o);
     }
@@ -1101,6 +1197,7 @@ bool CanvasView::deserializeScene(const QByteArray &data, int *missingOut)
         }
         m_zones.at(i)->setImage(image, imagePath);
         if (PhotoItem *item = m_zones.at(i)->item()) {
+            item->applyStoredRotation(o.value(QStringLiteral("rotation")).toInt(0));
             item->setScale(o.value(QStringLiteral("scale")).toDouble(1.0));
             item->setPos(o.value(QStringLiteral("x")).toDouble(), o.value(QStringLiteral("y")).toDouble());
         }

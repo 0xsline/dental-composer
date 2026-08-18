@@ -51,6 +51,10 @@ public:
     void fitToZone();
     void zoomBy(qreal factor, const QPointF &scenePos);           // 以场景点为原点等比例缩放
     void applyResize(ResizeHandle handle, const QPointF &mouseScene); // 以图片对边/对角为锚点等比缩放
+    void rotateBy90(int quarterTurns);                            // +1 顺时针，-1 逆时针；保持中心
+    void applyStoredRotation(int degrees);                        // 从磁盘图恢复 0/90/180/270
+    int rotationDegrees() const { return m_rotation; }
+    void setRotationField(int degrees) { m_rotation = normalizeRotation(degrees); }
     QPainterPath localClipPath() const;
     QRectF imageSceneRect() const;
     PhotoZone *zone() const { return m_zone; }
@@ -81,12 +85,15 @@ private:
     void applyAnchoredZoom(qreal factor, const QPointF &anchorScene);
     qreal maxScale() const;
     qreal handlePad() const;
+    void refreshDisplayPixmap();
+    static int normalizeRotation(int degrees);
     ResizeHandle handleAt(const QPointF &scenePos) const;
     QPointF resizeAnchor(ResizeHandle handle) const;
     qreal resizeFactor(ResizeHandle handle, const QPointF &mouseScene) const;
 
-    QImage m_image;       // 原图（导出/移动时用）
+    QImage m_image;       // 原图（导出/移动时用，含旋转）
     QString m_sourcePath; // 源文件路径（工程保存用）
+    int m_rotation = 0;   // 相对源文件的 0/90/180/270
     PhotoZone *m_zone = nullptr;
     QPointF m_lastScenePos;
     QPointF m_resizeAnchor;
@@ -159,6 +166,9 @@ public:
     void renderContent(QPainter *painter, const QRectF &target); // 白底、无分区的共用渲染
     bool deserializeScene(const QByteArray &data, int *missingOut = nullptr); // 恢复场景（撤销/打开工程用）
     bool exportImage(const QString &path, qreal scale);    // 按后缀导出 PNG/JPEG
+    QImage renderToImage(qreal scale);                     // 白底拼图栅格化
+    bool copyImageToClipboard(qreal scale = 2.0);          // 默认高清 2×
+    void rotateSelected(int quarterTurns);                 // 选中图片旋转
     bool exportPdf(const QString &path);
     bool saveProject(const QString &path);                 // 工程文件
     bool loadProject(const QString &path);
