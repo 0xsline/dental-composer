@@ -1,10 +1,47 @@
-name: build-windows
+name: build
 
 on:
   push:
   workflow_dispatch:
 
 jobs:
+  build-macos:
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.3'
+          host: mac
+          target: desktop
+          arch: clang_64
+          cache: true
+
+      - name: Configure and build
+        run: |
+          cmake -S . -B build-mac -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-mac --config Release -j3
+
+      - name: Selftest (offscreen)
+        run: |
+          export QT_QPA_PLATFORM=offscreen
+          mkdir -p "$RUNNER_TEMP/dc"
+          ./build-mac/dental-composer.app/Contents/MacOS/dental-composer --selftest "$RUNNER_TEMP/dc/selftest.png"
+
+      - name: Package dmg
+        run: |
+          macdeployqt build-mac/dental-composer.app -verbose=1
+          hdiutil create -volname "牙片拼图" -srcfolder build-mac/dental-composer.app \
+            -ov -format UDZO DentalComposer-0.1.5-mac.dmg
+          ls -lh DentalComposer-0.1.5-mac.dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dental-composer-macos
+          path: DentalComposer-0.1.5-mac.dmg
+
   build-win7-x64:
     runs-on: windows-2022
     steps:
