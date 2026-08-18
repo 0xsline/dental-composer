@@ -34,9 +34,17 @@ jobs:
         run: |
           windeployqt --release --no-translations build-win/Release/dental-composer.exe
           # Qt 5.15 的 PNG 支持内置于 Qt5Gui（无 qpng 插件）；JPEG/GIF 等插件已由 windeployqt 拷贝
-          # windeployqt 找不到 VCINSTALLDIR 会漏拷运行库，这里显式补上（v142 对应 VC142.CRT）
-          $crt = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC" -Recurse -Directory -Filter "Microsoft.VC142.CRT" | Select-Object -First 1
-          if ($crt) { Copy-Item -Force "$($crt.FullName)\*.dll" build-win\Release\ }
+          # windeployqt 找不到 VCINSTALLDIR 会漏拷运行库，这里显式补上。
+          # 必须锁定 x64 的 VC142 (14.29) 运行库：ARM64X/ARM64EC 版本在 Win7 上
+          # 会报"无法定位程序输入点 RtlIsEcCode"（Get-ChildItem 字母序会把 arm64 排在 x64 前面）
+          $crt = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC" -Recurse -Directory |
+                 Where-Object { $_.Name -eq 'Microsoft.VC142.CRT' -and $_.FullName -match '\\x64\\Microsoft\.VC142\.CRT$' } |
+                 Select-Object -First 1
+          if (-not $crt) { throw "VC142 x64 CRT not found" }
+          Copy-Item -Force "$($crt.FullName)\*.dll" build-win\Release\
+          $v1 = (Get-Item build-win\Release\vcruntime140_1.dll).VersionInfo.FileVersion
+          Write-Host "vcruntime140_1.dll version: $v1"
+          if ($v1 -notlike '14.29*') { throw "vcruntime140_1.dll wrong version: $v1" }
           # Win7 默认不带 UCRT，随包分发。必须用 Win10 SDK 19041 的 UCRT
           # （Win11 SDK 26100 的 ucrt 引用了 Win7 内核没有的函数，会报"无法定位程序输入点"）
           $ucrt = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\Redist" -Recurse -Directory |
