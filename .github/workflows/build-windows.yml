@@ -37,13 +37,20 @@ jobs:
           # windeployqt 找不到 VCINSTALLDIR 会漏拷运行库，这里显式补上（v142 对应 VC142.CRT）
           $crt = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC" -Recurse -Directory -Filter "Microsoft.VC142.CRT" | Select-Object -First 1
           if ($crt) { Copy-Item -Force "$($crt.FullName)\*.dll" build-win\Release\ }
-          # Win7 默认不带 UCRT（需 KB2999226 补丁），随包分发 ucrtbase.dll 等，保证裸机可跑
+          # Win7 默认不带 UCRT，随包分发。必须用 Win10 SDK 19041 的 UCRT
+          # （Win11 SDK 26100 的 ucrt 引用了 Win7 内核没有的函数，会报"无法定位程序输入点"）
           $ucrt = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\Redist" -Recurse -Directory |
-                  Where-Object { $_.FullName -match 'ucrt\\DLLs\\x64$' } | Select-Object -First 1
-          if ($ucrt) { Copy-Item -Force "$($ucrt.FullName)\*.dll" build-win\Release\ }
-          # 完整性断言
+                  Where-Object { $_.FullName -match '10\.0\.19041[^\\]*\\ucrt\\DLLs\\x64$' } | Select-Object -First 1
+          if (-not $ucrt) {
+            $ucrt = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\Redist" -Recurse -Directory |
+                    Where-Object { $_.FullName -match '10\.0\.1\d{4}[^\\]*\\ucrt\\DLLs\\x64$' } | Select-Object -First 1
+          }
+          if (-not $ucrt) { throw "No Win10 SDK ucrt redist found" }
+          Copy-Item -Force "$($ucrt.FullName)\*.dll" build-win\Release\
+          $ucrtVer = (Get-Item build-win\Release\ucrtbase.dll).VersionInfo.FileVersion
+          Write-Host "ucrtbase.dll version: $ucrtVer"
+          if ($ucrtVer -notlike "10.0.19041*") { throw "ucrtbase.dll not 19041: $ucrtVer" }
           if (-not (Test-Path build-win\Release\vcruntime140.dll)) { throw "vcruntime140.dll missing" }
-          if (-not (Test-Path build-win\Release\ucrtbase.dll)) { throw "ucrtbase.dll missing" }
 
       - name: Prepare signing
         shell: pwsh
