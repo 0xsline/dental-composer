@@ -31,13 +31,13 @@ jobs:
         run: |
           macdeployqt build-mac/dental-composer.app -verbose=1
           hdiutil create -volname "牙片拼图" -srcfolder build-mac/dental-composer.app \
-            -ov -format UDZO DentalComposer-0.1.5-mac.dmg
-          ls -lh DentalComposer-0.1.5-mac.dmg
+            -ov -format UDZO DentalComposer-0.1.6-mac.dmg
+          ls -lh DentalComposer-0.1.6-mac.dmg
 
       - uses: actions/upload-artifact@v4
         with:
           name: dental-composer-macos
-          path: DentalComposer-0.1.5-mac.dmg
+          path: DentalComposer-0.1.6-mac.dmg
 
   build-win7-x64:
     runs-on: windows-2022
@@ -140,4 +140,4 @@ jobs:
           name: dental-composer-win7-x64
           path: |
             build-win/Release/**
-            scripts/DentalComposer-0.1.5-Win7-x64-setup.exe
+            scripts/DentalComposer-0.1.6-Win7-x64-setup.exe

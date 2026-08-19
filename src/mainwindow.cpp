@@ -68,7 +68,6 @@ MainWindow::MainWindow(QWidget *parent)
     QAction *actSaveProject = fileMenu->addAction(tr("保存工程…"));
     fileMenu->addSeparator();
     QAction *actCopyImage = fileMenu->addAction(tr("复制拼图"));
-    fileMenu->addSeparator();
     QAction *actExportPdf = fileMenu->addAction(tr("导出 PDF…"));
     QAction *actPrintPreview = fileMenu->addAction(tr("打印预览…"));
     QAction *actPrint = fileMenu->addAction(tr("打印…"));
@@ -79,6 +78,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     QMenu *editMenu = menuBar()->addMenu(tr("编辑"));
     QAction *actPatient = editMenu->addAction(tr("患者信息…"));
+    QAction *actPasteImage = editMenu->addAction(tr("粘贴图片"));
     QAction *actRotateLeft = editMenu->addAction(tr("左转 90°"));
     QAction *actRotateRight = editMenu->addAction(tr("右转 90°"));
     editMenu->addSeparator();
@@ -110,6 +110,8 @@ MainWindow::MainWindow(QWidget *parent)
     QAction *actExport = toolBar->addAction(style()->standardIcon(QStyle::SP_DialogSaveButton), tr("导出图片"));
     toolBar->addAction(actCopyImage);
     actCopyImage->setToolTip(tr("复制高清拼图到剪贴板，可直接粘贴到微信"));
+    toolBar->addAction(actPasteImage);
+    actPasteImage->setToolTip(tr("把剪贴板里的图片贴进画布（Mac：⌘V，Windows：Ctrl+V）"));
 
     toolBar->addSeparator();
     toolBar->addWidget(new QLabel(tr(" 字号 "), toolBar));
@@ -150,6 +152,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(actClear, &QAction::triggered, this, &MainWindow::onClear);
     connect(actExport, &QAction::triggered, this, &MainWindow::onExport);
     connect(actCopyImage, &QAction::triggered, this, &MainWindow::onCopyImage);
+    connect(actPasteImage, &QAction::triggered, this, &MainWindow::onPasteImage);
     connect(actRotateLeft, &QAction::triggered, this, &MainWindow::onRotateLeft);
     connect(actRotateRight, &QAction::triggered, this, &MainWindow::onRotateRight);
     connect(actOpenProject, &QAction::triggered, this, &MainWindow::onOpenProject);
@@ -229,6 +232,12 @@ void MainWindow::onCopyImage()
         statusBar()->showMessage(tr("已复制拼图，可直接粘贴到微信"), 8000);
     else
         QMessageBox::warning(this, tr("复制失败"), tr("无法写入剪贴板。"));
+}
+
+void MainWindow::onPasteImage()
+{
+    if (!m_canvas->pasteFromClipboard())
+        statusBar()->showMessage(tr("剪贴板里没有图片，请先复制一张图"), 5000);
 }
 
 void MainWindow::onAddText()
@@ -382,7 +391,7 @@ void MainWindow::onOpenProject()
 void MainWindow::onAbout()
 {
     QMessageBox::about(this, tr("关于牙片拼图"),
-        tr("<b>牙片拼图</b> v0.1.5<br><br>"
+        tr("<b>牙片拼图</b> v0.1.6<br><br>"
            "牙科影像四格/三格/自由拼图工具：图片拖放、患者信息、文字叠加、高清导出与打印。"
            "<br>支持 Win7 SP1 64 位及以上、macOS。<br><br>"
            "作者：晨旭口腔 · 袁萍医生团队"));

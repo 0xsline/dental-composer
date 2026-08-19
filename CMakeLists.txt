@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(dental-composer VERSION 0.1.5 LANGUAGES CXX)
+project(dental-composer VERSION 0.1.6 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -40,7 +40,10 @@ if(WIN32)
 endif()
 
 if(APPLE)
-    target_link_libraries(dental-composer PRIVATE "-framework CoreFoundation")
+    target_link_libraries(dental-composer PRIVATE
+        "-framework CoreFoundation"
+        "-framework CoreGraphics"
+        "-framework ImageIO")
     set_target_properties(dental-composer PROPERTIES
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_BUNDLE_NAME "牙片拼图"

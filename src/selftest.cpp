@@ -308,6 +308,29 @@ int runSelftest(const QString &outPath)
         return 30;
     }
 
+    // 仅有图像数据、没有文件路径（微信/相册拖入）
+    canvas->applyLayout(0);
+    QImage clipImg(120, 80, QImage::Format_RGB32);
+    clipImg.fill(QColor(0x22, 0x8b, 0x22));
+    QMimeData imageOnly;
+    imageOnly.setImageData(clipImg);
+    if (!CanvasView::canAcceptImageDrop(&imageOnly)) {
+        std::fprintf(stderr, "SELFTEST FAIL: canAcceptImageDrop rejected image-only mime\n");
+        return 50;
+    }
+    if (CanvasView::imagesFromMime(&imageOnly).isEmpty()) {
+        std::fprintf(stderr, "SELFTEST FAIL: imagesFromMime missed image-only mime\n");
+        return 51;
+    }
+    QDragEnterEvent enterImg(dropPt, Qt::CopyAction, &imageOnly, Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(target, &enterImg);
+    QDropEvent dropImg(dropPt, Qt::CopyAction, &imageOnly, Qt::LeftButton, Qt::NoModifier);
+    QCoreApplication::sendEvent(target, &dropImg);
+    if (!canvas->zones().at(0)->hasImage()) {
+        std::fprintf(stderr, "SELFTEST FAIL: image-only drop did not import\n");
+        return 52;
+    }
+
     // 旋转 90°：宽高对调，撤销恢复；工程文件记下 rotation
     canvas->applyLayout(0);
     canvas->zones().at(0)->setImage(source[0], src1);
@@ -363,6 +386,19 @@ int runSelftest(const QString &outPath)
         std::fprintf(stderr, "SELFTEST FAIL: clipboard image size %dx%d\n",
                      clipped.width(), clipped.height());
         return 37;
+    }
+
+    canvas->applyLayout(0);
+    QImage pasteSrc(160, 100, QImage::Format_RGB32);
+    pasteSrc.fill(QColor(0x19, 0x76, 0xd2));
+    QGuiApplication::clipboard()->setImage(pasteSrc);
+    if (!canvas->pasteFromClipboard()) {
+        std::fprintf(stderr, "SELFTEST FAIL: pasteFromClipboard returned false\n");
+        return 53;
+    }
+    if (!canvas->zones().at(0)->hasImage()) {
+        std::fprintf(stderr, "SELFTEST FAIL: pasteFromClipboard did not fill zone\n");
+        return 54;
     }
 
     // 内嵌工程：删掉源图后仍能打开

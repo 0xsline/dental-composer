@@ -14,6 +14,8 @@
 #include <QGraphicsSimpleTextItem>
 #include <QImageReader>
 #include <QKeyEvent>
+#include <QKeySequence>
+#include <QVariant>
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QGuiApplication>
@@ -44,6 +46,8 @@
 #if defined(Q_OS_MAC)
 #include <unistd.h>
 #include <CoreFoundation/CoreFoundation.h>
+#include <CoreGraphics/CoreGraphics.h>
+#include <ImageIO/ImageIO.h>
 #endif
 
 #ifndef PATH_MAX
@@ -895,6 +899,69 @@ static QString localPathFromUrl(const QUrl &url)
     return path;
 }
 
+#if defined(Q_OS_MAC)
+static QImage qImageFromCGImage(CGImageRef cg)
+{
+    if (!cg)
+        return QImage();
+    const size_t w = CGImageGetWidth(cg);
+    const size_t h = CGImageGetHeight(cg);
+    if (w == 0 || h == 0)
+        return QImage();
+    QImage image(int(w), int(h), QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::transparent);
+    CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+    CGContextRef ctx = CGBitmapContextCreate(image.bits(), w, h, 8, image.bytesPerLine(), space,
+        kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Host);
+    CGColorSpaceRelease(space);
+    if (!ctx)
+        return QImage();
+    CGContextDrawImage(ctx, CGRectMake(0, 0, CGFloat(w), CGFloat(h)), cg);
+    CGContextRelease(ctx);
+    return image;
+}
+
+static QImage loadWithImageIO(const QByteArray &bytes)
+{
+    if (bytes.isEmpty())
+        return QImage();
+    CFDataRef data = CFDataCreate(kCFAllocatorDefault,
+        reinterpret_cast<const UInt8 *>(bytes.constData()), bytes.size());
+    if (!data)
+        return QImage();
+    CGImageSourceRef src = CGImageSourceCreateWithData(data, nullptr);
+    CFRelease(data);
+    if (!src)
+        return QImage();
+    CFMutableDictionaryRef opts = CFDictionaryCreateMutable(kCFAllocatorDefault, 2,
+        &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFDictionarySetValue(opts, kCGImageSourceCreateThumbnailFromImageAlways, kCFBooleanTrue);
+    CFDictionarySetValue(opts, kCGImageSourceCreateThumbnailWithTransform, kCFBooleanTrue);
+    CGImageRef cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts);
+    CFRelease(opts);
+    CFRelease(src);
+    const QImage image = qImageFromCGImage(cg);
+    if (cg)
+        CGImageRelease(cg);
+    return image;
+}
+#endif
+
+QImage CanvasView::loadImageFile(const QString &path)
+{
+    QImageReader reader(path);
+    reader.setAutoTransform(true);
+    QImage image = reader.read();
+    if (!image.isNull())
+        return image;
+#if defined(Q_OS_MAC)
+    QFile file(path);
+    if (file.open(QIODevice::ReadOnly))
+        image = loadWithImageIO(file.readAll());
+#endif
+    return image;
+}
+
 bool CanvasView::canAcceptImageDrop(const QMimeData *mime)
 {
     if (!mime)
@@ -947,8 +1014,48 @@ QStringList CanvasView::imagePathsFromMime(const QMimeData *mime)
         const QString path = localPathFromUrl(url);
         if (path.isEmpty())
             continue;
-        if (isImageFile(path) || QImageReader(path).canRead())
+        if (isImageFile(path) || QImageReader(path).canRead() || QFileInfo::exists(path))
             out << path;
+    }
+    return out;
+}
+
+QList<DroppedImage> CanvasView::imagesFromMime(const QMimeData *mime)
+{
+    QList<DroppedImage> out;
+    if (!mime)
+        return out;
+
+    const QStringList files = imagePathsFromMime(mime);
+    for (const QString &path : files) {
+        const QImage image = loadImageFile(path);
+        if (!image.isNull())
+            out.append(DroppedImage{ image, path });
+    }
+    if (!out.isEmpty())
+        return out;
+
+    if (mime->hasImage()) {
+        const QImage image = qvariant_cast<QImage>(mime->imageData());
+        if (!image.isNull())
+            out.append(DroppedImage{ image, QString() });
+    }
+    if (!out.isEmpty())
+        return out;
+
+    const char *rawFmts[] = { "image/png", "image/jpeg", "image/jpg", "image/heic", "image/heif", "image/webp" };
+    for (const char *fmt : rawFmts) {
+        if (!mime->hasFormat(QLatin1String(fmt)))
+            continue;
+        const QByteArray bytes = mime->data(QLatin1String(fmt));
+        QImage image;
+        image.loadFromData(bytes);
+#if defined(Q_OS_MAC)
+        if (image.isNull())
+            image = loadWithImageIO(bytes);
+#endif
+        if (!image.isNull())
+            out.append(DroppedImage{ image, QString() });
     }
     return out;
 }
@@ -973,9 +1080,7 @@ PhotoZone *CanvasView::firstEmptyZone() const
 
 bool CanvasView::importInto(PhotoZone *zone, const QString &path)
 {
-    QImageReader reader(path);
-    reader.setAutoTransform(true);
-    const QImage image = reader.read();
+    const QImage image = loadImageFile(path);
     if (image.isNull()) {
         emit statusMessage(tr("无法读取图片：%1").arg(QFileInfo(path).fileName()));
         return false;
@@ -994,9 +1099,7 @@ void CanvasView::importImages(const QStringList &files)
         QPointF origin = boardRect.center();
         int offset = 0;
         for (const QString &file : files) {
-            QImageReader reader(file);
-            reader.setAutoTransform(true);
-            const QImage image = reader.read();
+            const QImage image = loadImageFile(file);
             if (image.isNull()) {
                 emit statusMessage(tr("无法读取图片：%1").arg(QFileInfo(file).fileName()));
                 continue;
@@ -1562,50 +1665,81 @@ void CanvasView::dragMoveEvent(QDragMoveEvent *event)
 
 void CanvasView::dropEvent(QDropEvent *event)
 {
-    const QStringList files = imagePathsFromMime(event->mimeData());
-    if (files.isEmpty()) {
+    const QList<DroppedImage> dropped = imagesFromMime(event->mimeData());
+    if (dropped.isEmpty()) {
         event->ignore();
-        emit statusMessage(tr("无法读取拖入的图片"));
+        emit statusMessage(tr("无法读取拖入的图片（请用 Finder 拖 jpg/png，或从微信先保存再拖）"));
         return;
     }
     event->setDropAction(Qt::CopyAction);
     event->acceptProposedAction();
+    placeDroppedImages(dropped, mapToScene(QT_MOUSE_POS(event)));
+}
 
+int CanvasView::placeDroppedImages(const QList<DroppedImage> &dropped, const QPointF &scenePos)
+{
     int count = 0;
-    const QPointF scenePos = mapToScene(QT_MOUSE_POS(event));
+    QPointF pos = scenePos;
+    if (pos.isNull()) {
+        PhotoZone *board = m_zones.isEmpty() ? nullptr : m_zones.first();
+        pos = board ? board->rect().center() : m_scene.sceneRect().center();
+    }
     if (isFreeLayout()) {
         int offset = 0;
-        for (const QString &file : files) {
-            QImageReader reader(file);
-            reader.setAutoTransform(true);
-            const QImage image = reader.read();
-            if (image.isNull()) {
-                emit statusMessage(tr("无法读取图片：%1").arg(QFileInfo(file).fileName()));
-                continue;
-            }
-            if (addFreeImage(image, file, scenePos + QPointF(offset * 36.0, offset * 36.0)))
+        for (const DroppedImage &item : dropped) {
+            if (addFreeImage(item.image, item.path, pos + QPointF(offset * 36.0, offset * 36.0)))
                 ++count;
             ++offset;
         }
     } else {
         int index = 0;
-        if (PhotoZone *target = zoneAt(scenePos)) {
-            if (importInto(target, files.at(index)))
-                ++count;
+        if (PhotoZone *target = zoneAt(pos)) {
+            pushUndoSnapshot();
+            target->setImage(dropped.at(index).image, dropped.at(index).path);
+            ++count;
             ++index;
         }
-        for (; index < files.size(); ++index) {
+        for (; index < dropped.size(); ++index) {
             PhotoZone *zone = firstEmptyZone();
             if (!zone) {
                 emit statusMessage(tr("分区已满，剩余图片已忽略"));
                 break;
             }
-            if (importInto(zone, files.at(index)))
-                ++count;
+            pushUndoSnapshot();
+            zone->setImage(dropped.at(index).image, dropped.at(index).path);
+            ++count;
         }
     }
     if (count > 0)
         emit statusMessage(tr("已导入 %1 张图片").arg(count));
+    return count;
+}
+
+bool CanvasView::isEditingText() const
+{
+    if (auto *text = dynamic_cast<TextItem *>(m_scene.focusItem()))
+        return text->textInteractionFlags() != Qt::NoTextInteraction;
+    return false;
+}
+
+bool CanvasView::pasteFromClipboard(const QPointF &scenePos)
+{
+    QClipboard *clipboard = QGuiApplication::clipboard();
+    if (!clipboard) {
+        emit statusMessage(tr("无法访问剪贴板"));
+        return false;
+    }
+    QList<DroppedImage> dropped = imagesFromMime(clipboard->mimeData());
+    if (dropped.isEmpty()) {
+        const QImage image = clipboard->image();
+        if (!image.isNull())
+            dropped.append(DroppedImage{ image, QString() });
+    }
+    if (dropped.isEmpty()) {
+        emit statusMessage(tr("剪贴板里没有图片，请先复制一张图"));
+        return false;
+    }
+    return placeDroppedImages(dropped, scenePos) > 0;
 }
 
 void CanvasView::contextMenuEvent(QContextMenuEvent *event)
@@ -1629,15 +1763,15 @@ void CanvasView::contextMenuEvent(QContextMenuEvent *event)
         }
     }
 
-    if (m_scene.selectedItems().isEmpty()) {
-        event->ignore();
-        return;
-    }
-
     QMenu menu(this);
-    QAction *actDelete = menu.addAction(tr("删除"));
+    QAction *actPaste = menu.addAction(tr("粘贴图片"));
+    QAction *actDelete = nullptr;
+    if (!m_scene.selectedItems().isEmpty())
+        actDelete = menu.addAction(tr("删除"));
     const QAction *chosen = menu.exec(event->globalPos());
-    if (chosen == actDelete)
+    if (chosen == actPaste)
+        pasteFromClipboard(scenePos);
+    else if (chosen == actDelete)
         removeSelected();
     event->accept();
 }
@@ -1660,9 +1794,7 @@ void CanvasView::mouseDoubleClickEvent(QMouseEvent *event)
         if (file.isEmpty())
             return;
         if (isFreeLayout()) {
-            QImageReader reader(file);
-            reader.setAutoTransform(true);
-            const QImage image = reader.read();
+            const QImage image = loadImageFile(file);
             if (!image.isNull())
                 addFreeImage(image, file, scenePos);
         } else {
@@ -1682,7 +1814,13 @@ void CanvasView::wheelEvent(QWheelEvent *event)
 void CanvasView::keyPressEvent(QKeyEvent *event)
 {
     const int key = event->key();
-    if (event->modifiers() & Qt::ControlModifier && key == Qt::Key_Z) {
+    if (event->matches(QKeySequence::Paste) && !isEditingText()) {
+        pasteFromClipboard();
+        return;
+    }
+    if (event->matches(QKeySequence::Undo)
+        || (event->modifiers() & Qt::ControlModifier && key == Qt::Key_Z)
+        || (event->modifiers() & Qt::MetaModifier && key == Qt::Key_Z)) {
         undo();
         return;
     }

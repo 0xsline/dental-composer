@@ -34,6 +34,7 @@ private slots:
     void onRotateLeft();
     void onRotateRight();
     void onCopyImage();
+    void onPasteImage();
 
 private:
     void updateColorButton();

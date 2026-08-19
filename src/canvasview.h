@@ -37,6 +37,12 @@ struct LayoutSpec
     bool freeform = false;
 };
 
+struct DroppedImage
+{
+    QImage image;
+    QString path;
+};
+
 // 分区内的一张图片：整图等比例缩放，可小于分区；拖边改图片大小，滚轮等比缩放。
 class PhotoItem : public QGraphicsPixmapItem
 {
@@ -175,6 +181,7 @@ public:
     bool exportImage(const QString &path, qreal scale);    // 按后缀导出 PNG/JPEG
     QImage renderToImage(qreal scale);                     // 白底拼图栅格化
     bool copyImageToClipboard(qreal scale = 2.0);          // 默认高清 2×
+    bool pasteFromClipboard(const QPointF &scenePos = QPointF()); // 粘贴剪贴板图片
     void rotateSelected(int quarterTurns);                 // 选中图片旋转
     bool exportPdf(const QString &path);
     bool saveProject(const QString &path);                 // 工程文件
@@ -186,6 +193,8 @@ public:
     void raisePhoto(PhotoItem *item);
     static bool canAcceptImageDrop(const QMimeData *mime);
     static QStringList imagePathsFromMime(const QMimeData *mime);
+    static QList<DroppedImage> imagesFromMime(const QMimeData *mime);
+    static QImage loadImageFile(const QString &path);
 
 signals:
     void statusMessage(const QString &message);
@@ -208,6 +217,8 @@ private:
     PhotoZone *firstEmptyZone() const;
     bool importInto(PhotoZone *zone, const QString &path);
     void removeLoosePhoto(PhotoItem *photo);
+    int placeDroppedImages(const QList<DroppedImage> &dropped, const QPointF &scenePos);
+    bool isEditingText() const;
     static bool isImageFile(const QString &path);
     TextItem *createTextItem(const QString &text);
     void fitScene();
